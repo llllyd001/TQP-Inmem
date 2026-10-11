@@ -24,13 +24,14 @@ subquery_result = None
 gpu_enable          = True
 force_generate_plan = False 
 
-def warmup():
-    exec(1, list(range(1, 23)), None, None, True, None, None, None)
+def warmup(gpu_pool_gb=4):
+    exec(1, list(range(1, 23)), None, None, True, None, None, None, gpu_pool_gb=gpu_pool_gb)
 
 pinned_pool = None
 gpu_memory_pool = None
 
-def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, datasize_profile_dir, time_output_file):
+def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, datasize_profile_dir, time_output_file,
+         gpu_pool_gb=4):
     
     # message_logger().debug("[Read Configuration & Schema JSON]")
     with open('config.json', 'r') as f:
@@ -52,8 +53,8 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
     print("done!", flush=True)
     
     if gpu_memory_pool is None:
-        print("Allocating GPU Memory...", flush=True)
-        gpu_memory_pool = GPUMemory(capacity_gb=40, block_size_mb=(40 / 2000 * 2000))
+        print(f"Allocating GPU Memory ({float(gpu_pool_gb)} GB)...", flush=True)
+        gpu_memory_pool = GPUMemory(capacity_gb=gpu_pool_gb, block_size_mb=40)
         print("done!", flush=True)
 
     set_message_logger(log, not no_debug)
@@ -313,6 +314,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--SF', type=int, default=1, help='Scale Factor')
+    parser.add_argument('--gpu_pool_gb', type=float, default=4,
+                        help='GPU memory pool capacity in decimal GB (1 GB = 10^9 bytes)')
     parser.add_argument('--q', type=int, nargs='+', default=list(range(1, 23)), help='List of Query IDs')
     parser.add_argument('--perf_report', type=str, required=False, help='Performance timers directory')
     parser.add_argument("--log", type=str, required=False, help='debug log directory')
@@ -335,9 +338,9 @@ if __name__ == "__main__":
 
     message_logger().info("Starting Warmup") 
     for _ in range(args.warmup_iter):
-        warmup()
+        warmup(gpu_pool_gb=args.gpu_pool_gb)
     message_logger().info("Warmup Finished")
 
     with torch.inference_mode():
-        exec(args.SF, args.q, args.perf_report, args.log, args.no_debug, args.torch_profile, args.datasize_profile, args.time_output_file)
-    
+        exec(args.SF, args.q, args.perf_report, args.log, args.no_debug, args.torch_profile,
+             args.datasize_profile, args.time_output_file, gpu_pool_gb=args.gpu_pool_gb)
