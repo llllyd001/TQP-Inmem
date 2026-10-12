@@ -21,6 +21,10 @@ class MemoryPool:
         self._free = [(0, self._num_blocks)]
         self._allocs = {}
         self._free_times = 0
+        self._used_blocks = 0
+        self._requested_bytes = {}
+        self._peak_blocks = 0
+        self._num_allocs = 0
 
     def get_storage(self, actual_size_bytes):
         alloc_blocks = max((actual_size_bytes + self.block_size_bytes - 1) // self.block_size_bytes, 1)
@@ -34,6 +38,10 @@ class MemoryPool:
                 else: 
                     self._free[i] = (start + alloc_blocks, length - alloc_blocks)
                 self._allocs[ptr] = alloc_blocks
+                self._requested_bytes[ptr] = actual_size_bytes
+                self._used_blocks += alloc_blocks
+                self._num_allocs += 1
+                self._peak_blocks = max(self._peak_blocks, self._used_blocks)
                 return ptr, self._mem_pool[start * self.block_size_bytes : \
                                            start * self.block_size_bytes + actual_size_bytes]  # only return actual size for view
         raise MemoryError(f"Pinned memory cannot allocate {alloc_blocks} blocks")
@@ -57,12 +65,16 @@ class MemoryPool:
     def free_all(self):
         self._free = [(0, self._num_blocks)]
         self._allocs.clear()
+        self._used_blocks = 0
+        self._requested_bytes.clear()
 
     def free(self, ptr: int):
         length = self._allocs.pop(ptr, None)
         if length is None:
             raise ValueError(f"{ptr} not found in pool")
 
+        self._used_blocks -= length
+        del self._requested_bytes[ptr]
         self._free.append((ptr, length))
         
         self._free_times += 1
@@ -100,6 +112,7 @@ class MemoryPool:
             raise ValueError(f"{ptr} not found in pool")
         block_size = self.block_size_bytes
         blocks_to_retain = (bytes_to_retain + block_size - 1) // block_size
+        self._requested_bytes[ptr] = min(self._requested_bytes[ptr], bytes_to_retain)
         if blocks_to_retain >= length:
             # Retain all, nothing to free
             return
@@ -111,11 +124,24 @@ class MemoryPool:
    
         free_start = ptr + blocks_to_retain
         self._allocs[ptr] = blocks_to_retain
+        self._used_blocks -= blocks_to_free
         self._free.append((free_start, blocks_to_free))
         self._free_times += 1
         if self._free_times > self.COALESCE_THRESHOLD:
             self.coalesce()
     
+    def stats(self):
+        return {
+            "capacity_bytes": self.pool_size_bytes,
+            "used_bytes": self._used_blocks * self.block_size_bytes,
+            "requested_bytes": sum(self._requested_bytes.values()),
+            "peak_bytes": self._peak_blocks * self.block_size_bytes,
+            "num_allocs": self._num_allocs,
+        }
+
+    def reset_peak(self):
+        self._peak_blocks = self._used_blocks
+
     def get_external_frag(self):
         return 1 - (max(x[1] for x in self._free) / sum(x[1] for x in self._free))
     
