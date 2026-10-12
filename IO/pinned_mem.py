@@ -80,6 +80,7 @@ class MemoryPool:
         self._free_times += 1
         if self._free_times > self.COALESCE_THRESHOLD:
             self.coalesce()
+            self._free_times = 0
             
     def coalesce(self):
         self._free.sort(key=lambda x: x[0])
@@ -129,6 +130,7 @@ class MemoryPool:
         self._free_times += 1
         if self._free_times > self.COALESCE_THRESHOLD:
             self.coalesce()
+            self._free_times = 0
     
     def stats(self):
         return {
