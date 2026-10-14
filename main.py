@@ -19,6 +19,7 @@ from operators.output import tqp_output
 from operators.hashjoin import join_vortex
 from utility.logger import datasize_logger, torch_profiler, perf_logger, message_logger, set_torch_profiler, set_datasize_logger, set_perf_logger, set_message_logger
 from IO.pinned_mem import PinnedMemory, GPUMemory
+from experiments.profiling.mem_profiler import mem_profiler, set_mem_profiler
 
 subquery_result = None
 gpu_enable          = True
@@ -32,7 +33,7 @@ pinned_pool = None
 gpu_memory_pool = None
 
 def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, datasize_profile_dir, time_output_file,
-         gpu_pool_gb=4, pinned_pool_gb=2):
+         gpu_pool_gb=4, pinned_pool_gb=2, mem_profile=None):
     
     # message_logger().debug("[Read Configuration & Schema JSON]")
     with open('config.json', 'r') as f:
@@ -51,6 +52,7 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
         gpu_memory_pool = GPUMemory(capacity_gb=gpu_pool_gb, block_size_mb=40)
         print("done!", flush=True)
 
+    set_mem_profiler(mem_profile, gpu_memory_pool, scale_factor)
     set_message_logger(log, not no_debug)
     
     with open("results.out", "w", encoding="utf-8") as f: # Clear outputs for this run
@@ -110,6 +112,7 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
         if gpu_enable:
             torch.cuda.empty_cache()
 
+        mem_profiler().query_start(qid)
         perf_logger().start(f"Query {qid}")
         read_time, trans_time, output_time = 0, 0, 0
         q_start_time = time.time()
@@ -286,6 +289,7 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
                 writer.writerow([scale_factor, qid, f"{time_elapsed:.6f}"])
 
         pinned_pool.free_all()
+        mem_profiler().query_end()
         gpu_memory_pool.free_all()
 
         pd.options.display.float_format = '{:.6f}'.format
@@ -318,6 +322,7 @@ if __name__ == "__main__":
     parser.add_argument('--no_debug', action='store_true', help='Disable debug logs')
     parser.add_argument('--torch_profile', type=str, required=False, help='Torch profiling files output directory')
     parser.add_argument('--datasize_profile', type=str, required=False, help='Transferred data size output directory')
+    parser.add_argument('--mem_profile', type=str, required=False, help='Query-level GPU memory records CSV')
     parser.add_argument('--test', action='store_true', help='End to end testing for correcteness on TPCH')
     parser.add_argument('--warmup_iter', type=int, default=0, help='Number of warmup iterations')
     parser.add_argument('--time_output_file', type=str, required=False, help='File to save performance numbers')    
@@ -338,6 +343,10 @@ if __name__ == "__main__":
     message_logger().info("Warmup Finished")
 
     with torch.inference_mode():
-        exec(args.SF, args.q, args.perf_report, args.log, args.no_debug, args.torch_profile,
-             args.datasize_profile, args.time_output_file,
-             gpu_pool_gb=args.gpu_pool_gb, pinned_pool_gb=args.pinned_pool_gb)
+        try:
+            exec(args.SF, args.q, args.perf_report, args.log, args.no_debug, args.torch_profile,
+                 args.datasize_profile, args.time_output_file,
+                 gpu_pool_gb=args.gpu_pool_gb, pinned_pool_gb=args.pinned_pool_gb, mem_profile=args.mem_profile)
+        except (torch.OutOfMemoryError, MemoryError) as e:
+            mem_profiler().query_failed(e)
+            raise
