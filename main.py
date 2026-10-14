@@ -24,14 +24,15 @@ subquery_result = None
 gpu_enable          = True
 force_generate_plan = False 
 
-def warmup(gpu_pool_gb=4):
-    exec(1, list(range(1, 23)), None, None, True, None, None, None, gpu_pool_gb=gpu_pool_gb)
+def warmup(gpu_pool_gb=4, pinned_pool_gb=2):
+    exec(1, list(range(1, 23)), None, None, True, None, None, None,
+         gpu_pool_gb=gpu_pool_gb, pinned_pool_gb=pinned_pool_gb)
 
 pinned_pool = None
 gpu_memory_pool = None
 
 def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, datasize_profile_dir, time_output_file,
-         gpu_pool_gb=4):
+         gpu_pool_gb=4, pinned_pool_gb=2):
     
     # message_logger().debug("[Read Configuration & Schema JSON]")
     with open('config.json', 'r') as f:
@@ -41,15 +42,8 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
     global pinned_pool
     global gpu_memory_pool
     
-    print("Pinning CPU memory...", flush=True)
-    if scale_factor == 1:
-        pinned_pool = PinnedMemory(capacity_gb=15, block_size_mb= int(15 / 2000 * 1000 ))
-    elif scale_factor == 10:
-        pinned_pool = PinnedMemory(capacity_gb=50, block_size_mb= int(50 / 2000 * 1000 ))
-    elif scale_factor == 100:
-        pinned_pool = PinnedMemory(capacity_gb=100, block_size_mb= int(100 / 2000 * 1000 ))
-    else:
-        pinned_pool = PinnedMemory(capacity_gb=250, block_size_mb= int(250 / 2000 * 1000 ))
+    print(f"Pinning CPU memory ({float(pinned_pool_gb)} GB)...", flush=True)
+    pinned_pool = PinnedMemory(capacity_gb=pinned_pool_gb, block_size_mb=pinned_pool_gb / 2000 * 1000)
     print("done!", flush=True)
     
     if gpu_memory_pool is None:
@@ -316,6 +310,8 @@ if __name__ == "__main__":
     parser.add_argument('--SF', type=int, default=1, help='Scale Factor')
     parser.add_argument('--gpu_pool_gb', type=float, default=4,
                         help='GPU memory pool capacity in decimal GB (1 GB = 10^9 bytes)')
+    parser.add_argument('--pinned_pool_gb', type=float, default=2,
+                        help='Pinned CPU pool capacity in decimal GB (1 GB = 10^9 bytes); currently unused by operators')
     parser.add_argument('--q', type=int, nargs='+', default=list(range(1, 23)), help='List of Query IDs')
     parser.add_argument('--perf_report', type=str, required=False, help='Performance timers directory')
     parser.add_argument("--log", type=str, required=False, help='debug log directory')
@@ -338,9 +334,10 @@ if __name__ == "__main__":
 
     message_logger().info("Starting Warmup") 
     for _ in range(args.warmup_iter):
-        warmup(gpu_pool_gb=args.gpu_pool_gb)
+        warmup(gpu_pool_gb=args.gpu_pool_gb, pinned_pool_gb=args.pinned_pool_gb)
     message_logger().info("Warmup Finished")
 
     with torch.inference_mode():
         exec(args.SF, args.q, args.perf_report, args.log, args.no_debug, args.torch_profile,
-             args.datasize_profile, args.time_output_file, gpu_pool_gb=args.gpu_pool_gb)
+             args.datasize_profile, args.time_output_file,
+             gpu_pool_gb=args.gpu_pool_gb, pinned_pool_gb=args.pinned_pool_gb)
