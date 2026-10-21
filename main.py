@@ -19,7 +19,8 @@ from operators.output import tqp_output
 from operators.hashjoin import join_vortex
 from utility.logger import datasize_logger, torch_profiler, perf_logger, message_logger, set_torch_profiler, set_datasize_logger, set_perf_logger, set_message_logger
 from IO.pinned_mem import PinnedMemory, GPUMemory
-from experiments.profiling.mem_profiler import mem_profiler, set_mem_profiler
+from utility.lifetime import free_dead as release_dead, last_uses
+from experiments.profiling.mem_profiler import mem_profiler, set_mem_profiler, TracedTensorGroup
 
 subquery_result = None
 gpu_enable          = True
@@ -33,7 +34,8 @@ pinned_pool = None
 gpu_memory_pool = None
 
 def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, datasize_profile_dir, time_output_file,
-         gpu_pool_gb=4, pinned_pool_gb=2, mem_profile=None):
+         gpu_pool_gb=4, pinned_pool_gb=2, mem_profile=None, mem_trace=None,
+         free_dead=False, poison_freed=False, check_refs=False):
     
     # message_logger().debug("[Read Configuration & Schema JSON]")
     with open('config.json', 'r') as f:
@@ -52,7 +54,7 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
         gpu_memory_pool = GPUMemory(capacity_gb=gpu_pool_gb, block_size_mb=40)
         print("done!", flush=True)
 
-    set_mem_profiler(mem_profile, gpu_memory_pool, scale_factor)
+    set_mem_profiler(mem_profile, gpu_memory_pool, scale_factor, mem_trace)
     set_message_logger(log, not no_debug)
     
     with open("results.out", "w", encoding="utf-8") as f: # Clear outputs for this run
@@ -118,20 +120,24 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
         q_start_time = time.time()
         
         subquery_result = None
-        for query_plan in query_plans:
-            tensor_group = {}
+        for plan, query_plan in enumerate(query_plans):
+            tensor_group = TracedTensorGroup() if mem_trace is not None else {}
             ops, args, parent_tree = query_plan.ops_idx, query_plan.ops_dict, query_plan.query_parent_map
+
+            if free_dead:
+                last = last_uses(ops, args)
 
             if subquery_result and qid == 11:
                 subquery_result /= scale_factor
 
-            for u in ops:
+            for j, u in enumerate(ops):
                 args_u = args[u]    
                 name = args_u['name']
                 datasize_logger().set_operator(name)
                 message_logger().info("%s %s", "\n", f"Executing operator {u} {name}")
                 num_rows = None
 
+                mem_profiler().op_start(plan, u, name)
                 op_start = time.time()
                 if name == 'Scan':
                     with perf_logger().time(f"scan {u}"):
@@ -271,6 +277,10 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
                 if gpu_enable:
                     torch.cuda.synchronize()
                 
+                mem_profiler().op_end()
+                if free_dead:
+                    freed = release_dead(tensor_group, gpu_memory_pool, last, j, poison_freed, check_refs)
+                    mem_profiler().record_frees(plan, u, freed)
                 op_end = time.time()
                 op_time = op_end - op_start    
 
@@ -323,11 +333,20 @@ if __name__ == "__main__":
     parser.add_argument('--torch_profile', type=str, required=False, help='Torch profiling files output directory')
     parser.add_argument('--datasize_profile', type=str, required=False, help='Transferred data size output directory')
     parser.add_argument('--mem_profile', type=str, required=False, help='Query-level GPU memory records CSV')
+    parser.add_argument('--mem_trace', type=str, help='Operator-level GPU memory records directory')
+    parser.add_argument('--free_dead', action='store_true', help='Release columns and slab blocks after last use')
+    parser.add_argument('--poison_freed', action='store_true', help='Fill released slab blocks with 0xFF')
+    parser.add_argument('--check_refs', action='store_true', help='Check surviving CUDA tensor references')
     parser.add_argument('--test', action='store_true', help='End to end testing for correcteness on TPCH')
     parser.add_argument('--warmup_iter', type=int, default=0, help='Number of warmup iterations')
     parser.add_argument('--time_output_file', type=str, required=False, help='File to save performance numbers')    
 
     args = parser.parse_args()
+    if args.mem_trace is not None and args.mem_profile is None:
+        parser.error("--mem_trace requires --mem_profile")
+
+    if (args.poison_freed or args.check_refs) and not args.free_dead:
+        parser.error("--poison_freed and --check_refs require --free_dead")
 
     set_message_logger(args.log, False)
 
@@ -346,7 +365,9 @@ if __name__ == "__main__":
         try:
             exec(args.SF, args.q, args.perf_report, args.log, args.no_debug, args.torch_profile,
                  args.datasize_profile, args.time_output_file,
-                 gpu_pool_gb=args.gpu_pool_gb, pinned_pool_gb=args.pinned_pool_gb, mem_profile=args.mem_profile)
+                 gpu_pool_gb=args.gpu_pool_gb, pinned_pool_gb=args.pinned_pool_gb, mem_profile=args.mem_profile,
+                 mem_trace=args.mem_trace, free_dead=args.free_dead,
+                 poison_freed=args.poison_freed, check_refs=args.check_refs)
         except (torch.OutOfMemoryError, MemoryError) as e:
             mem_profiler().query_failed(e)
             raise

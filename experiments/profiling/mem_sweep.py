@@ -23,6 +23,61 @@ def read_rows(path):
         return list(csv.DictReader(stream))
 
 
+def generate_data(data, sf, dbgen_dir):
+    subprocess.run(['nice', '-n', '10', './dbgen', '-s', str(sf)],
+                   cwd=dbgen_dir.expanduser(), input='1\n', text=True, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    files = sorted(data.glob(f'SF{sf}-tensor-*.pth'))
+    digest, size = hashlib.sha256(), 0
+    for path in files:
+        size += path.stat().st_size
+        with path.open('rb') as stream:
+            checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
+        digest.update(f'{path.name} {checksum}\n'.encode())
+    print(f'SF={sf} data: {len(files)} files, {size / 1e9:.3f} GB, sha256={digest.hexdigest()}', flush=True)
+
+
+def prepare_data(root, sf, dbgen_dir):
+    data = root / Path(json.loads((root / 'config.json').read_text())['tensors path']).expanduser()
+    sf1_bytes = sum(path.stat().st_size for path in data.glob('SF1-tensor-*.pth'))
+    if any(data.glob(f'SF{sf}-tensor-*.pth')):
+        return data, False
+    if sf * sf1_bytes > shutil.disk_usage(data).free * 0.15:
+        print(f'Sweep stopped: SF={sf} data estimate exceeds 15% of free space; ask the user first.', flush=True)
+        return data, None
+    try:
+        generate_data(data, sf, dbgen_dir)
+    except BaseException:
+        if sf != 1:
+            delete_data(data, sf)
+        raise
+    return data, True
+
+
+def check_gpu_idle(gpu_uuid):
+    apps = nvidia_smi('--query-compute-apps=gpu_uuid,pid', '--format=csv,noheader')
+    for uuid, pid in csv.reader(apps.splitlines(), skipinitialspace=True):
+        if uuid.strip() == gpu_uuid:
+            raise SystemExit(f'Sweep stopped: GPU {gpu_uuid} is occupied by PID {pid.strip()}')
+
+
+def wait_for_headroom(gpu_uuid, need_bytes):
+    # Shared GPU: start only when the free memory covers this query; never touch other processes.
+    while True:
+        for uuid, total, used in csv.reader(nvidia_smi('--query-gpu=uuid,memory.total,memory.used',
+                                                       '--format=csv,noheader,nounits').splitlines(),
+                                            skipinitialspace=True):
+            if uuid == gpu_uuid and (int(total) - int(used)) * 2**20 >= need_bytes:
+                return
+        print(f'waiting for {need_bytes / 1e9:.1f} GB free on {gpu_uuid}', flush=True)
+        time.sleep(30)
+
+
+def delete_data(data, sf):
+    for path in data.glob(f'SF{sf}-tensor-*.pth'):
+        path.unlink()
+
+
 def main():
     parser = argparse.ArgumentParser(description='Sweep query memory limits in isolated processes.')
     parser.add_argument('--q', type=int, nargs='+', default=list(range(1, 23)), choices=range(1, 23))
@@ -40,32 +95,16 @@ def main():
     out = args.out.resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    if args.manage_data:
-        data = root / Path(json.loads((root / 'config.json').read_text())['tensors path']).expanduser()
-        sf1_bytes = sum(path.stat().st_size for path in data.glob('SF1-tensor-*.pth'))
     states = {q: (0, 0, 'ok') for q in args.q}
     for sf in sorted(args.sf):
         if all(result != 'ok' for _, _, result in states.values()):
             break
         generated = False
         try:
-            if args.manage_data and not any(data.glob(f'SF{sf}-tensor-*.pth')):
-                if sf * sf1_bytes > shutil.disk_usage(data).free * 0.15:
-                    print(f'Sweep stopped: SF={sf} data estimate exceeds 15% of free space; ask the user first.',
-                          flush=True)
+            if args.manage_data:
+                data, generated = prepare_data(root, sf, args.dbgen_dir)
+                if generated is None:
                     break
-                generated = True
-                subprocess.run(['nice', '-n', '10', './dbgen', '-s', str(sf)],
-                               cwd=args.dbgen_dir.expanduser(), input='1\n', text=True, check=True,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                files = sorted(data.glob(f'SF{sf}-tensor-*.pth'))
-                digest, size = hashlib.sha256(), 0
-                for path in files:
-                    size += path.stat().st_size
-                    with path.open('rb') as stream:
-                        checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
-                    digest.update(f'{path.name} {checksum}\n'.encode())
-                print(f'SF={sf} data: {len(files)} files, {size / 1e9:.3f} GB, sha256={digest.hexdigest()}', flush=True)
             for q, (last_sf, peak, result) in states.items():
                 if result != 'ok':
                     continue
@@ -76,10 +115,7 @@ def main():
                 result = 'pool cannot fit'
                 while blocks <= max_blocks:
                     # Check the selected physical GPU before every fresh process.
-                    apps = nvidia_smi('--query-compute-apps=gpu_uuid,pid', '--format=csv,noheader')
-                    for uuid, pid in csv.reader(apps.splitlines(), skipinitialspace=True):
-                        if uuid.strip() == gpu_uuid:
-                            raise SystemExit(f'Sweep stopped: GPU {gpu_uuid} is occupied by PID {pid.strip()}')
+                    check_gpu_idle(gpu_uuid)
                     previous_count = len(read_rows(out))
                     pool = f'{blocks / 25:.2f}'
                     started = time.perf_counter()
@@ -122,8 +158,7 @@ def main():
                 states[q] = last_sf, peak, result
         finally:
             if generated and sf != 1:
-                for path in data.glob(f'SF{sf}-tensor-*.pth'):
-                    path.unlink()
+                delete_data(data, sf)
     for q, (last_sf, _, result) in states.items():
         print(f'Q={q}: max successful SF={last_sf or "none"}; result={result}', flush=True)
 
