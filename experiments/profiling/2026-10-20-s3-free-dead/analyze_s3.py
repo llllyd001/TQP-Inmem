@@ -67,7 +67,7 @@ def analyze(query, ops, allocs, reads, frees):
                 static_need_real_bytes=highwater + int(query['transient_peak_bytes']))
 
 
-def main():
+def load_traces():
     # trace-rerun/ holds queries re-measured after a failure caused by another user's GPU job;
     # its rows replace the failed run's rows for the same (sf, qid).
     names = ('queries', 'ops', 'allocs', 'reads', 'frees')
@@ -75,13 +75,18 @@ def main():
     redone = {(r['sf'], r['qid']) for r in rerun['queries']}
     traces = {name: [r for r in read_rows(HERE / 'trace' / f'{name}.csv') if (r['sf'], r['qid']) not in redone]
               + rerun[name] for name in names}
-    baseline = {(r['sf'], r['qid']): r for r in
-                read_rows(HERE.parent / '2026-10-20-baseline-trace/baseline_derived.csv')}
     grouped = {}
     for name in ('ops', 'allocs', 'reads', 'frees'):
         grouped[name] = defaultdict(list)
         for row in traces[name]:
             grouped[name][row['sf'], row['qid']].append(row)
+    return traces, grouped
+
+
+def main():
+    traces, grouped = load_traces()
+    baseline = {(r['sf'], r['qid']): r for r in
+                read_rows(HERE.parent / '2026-10-20-baseline-trace/baseline_derived.csv')}
     rows = []
     seen = set()
     for query in traces['queries']:

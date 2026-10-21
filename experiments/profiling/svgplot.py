@@ -129,7 +129,7 @@ def _grouped_bars(path, categories, series, title, subtitle, ylabel, xlabel, ref
     f.save(path)
 
 
-def line_chart(path, xs, series, title, subtitle, ylabel, xlabel, ref=None):
+def line_chart(path, xs, series, title, subtitle, ylabel, xlabel, ref=None, labels=None):
     """series: [(name, ys)] over shared numeric xs; None in ys ends the line there (e.g. OOM).
     ref=(y, label) e.g. the GPU capacity. Lines are direct-labeled when there are at most 4."""
     f = _Frame(title, subtitle, ylabel,
@@ -137,8 +137,8 @@ def line_chart(path, xs, series, title, subtitle, ylabel, xlabel, ref=None):
                [(name, SERIES[k]) for k, (name, _) in enumerate(series)])
     span = (max(xs) - min(xs)) or 1
     px = lambda v: f.x0 + 20 + (f.x1 - f.x0 - 40) * (v - min(xs)) / span
-    for x in xs:
-        f.parts.append(_text(px(x), f.y0 + 18, _fmt(x), 12, anchor="middle"))
+    for i, x in enumerate(xs):
+        f.parts.append(_text(px(x), f.y0 + 18, labels[i] if labels else _fmt(x), 12, anchor="middle"))
     for k, (name, ys) in enumerate(series):
         pts = [(px(x), f.y(y)) for x, y in zip(xs, ys) if y is not None]
         f.parts.append(f'<polyline points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in pts)}" fill="none" '
@@ -181,7 +181,6 @@ def render_png(svg_path):
     subprocess.run(["google-chrome", "--headless", "--disable-gpu", "--hide-scrollbars",
                     f"--window-size={width},{height}", f"--screenshot={svg.with_suffix('.png')}", svg.as_uri()],
                    check=True, capture_output=True)
-
 
 def stacked_grid(path, categories, panels, segments):
     """Shared-scale small multiples; each category has two stacks, or None for OOM."""

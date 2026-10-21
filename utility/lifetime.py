@@ -28,29 +28,24 @@ def last_uses(ops, args):
 
 
 def max_live_columns(ops, args, free_dead=False):
+    """Bound on slab allocations held during any operator: columns still live when it starts
+    plus every column it outputs (an output gets a fresh allocation while its inputs are held)."""
     last = last_uses(ops, args)
-    births = {}
+    outputs, births = [], {}
     for j, u in enumerate(ops):
         op = args[u]
-        outputs = list(op.get('output ids', []))
+        out = set(op.get('output ids', []))
         if op['name'] != 'Scan':
-            outputs.extend(op.get('materialized out', []))
+            out.update(op.get('materialized out', []))
             if 'out mask id' in op:
-                outputs.append(op['out mask id'])
-        for col in outputs:
+                out.add(op['out mask id'])
+        outputs.append(out)
+        for col in out:
             births.setdefault(col, j)
-
-    # Count inputs and newly born outputs together, before end-of-operator frees.
-    changes = [0] * (len(ops) + 1)
-    for col, birth in births.items():
-        death = max(birth, last.get(col, birth)) if free_dead and col < MASK_COL_START else len(ops) - 1
-        changes[birth] += 1
-        changes[death + 1] -= 1
-    live = peak = 0
-    for change in changes:
-        live += change
-        peak = max(peak, live)
-    return peak
+    end = len(ops) - 1
+    death = {col: max(birth, last.get(col, birth)) if free_dead and col < MASK_COL_START else end
+             for col, birth in births.items()}
+    return max(sum(births[col] < j <= death[col] for col in births) + len(outputs[j]) for j in range(len(ops)))
 
 
 def free_dead(tensor_group, pool, last, j, poison=False, check_refs=False):
