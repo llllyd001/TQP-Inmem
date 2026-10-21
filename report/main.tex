@@ -9,6 +9,16 @@
 \usepackage{xcolor}
 \usepackage{enumitem}
 \usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{pgfplotstable}
+\pgfplotsset{compat=1.16,
+  every axis/.append style={font=\scriptsize, tick label style={font=\tiny}, label style={font=\scriptsize},
+    legend style={font=\tiny, draw=none, fill=none, at={(0.5,1.02)}, anchor=south}, legend cell align=left,
+    ymajorgrids, grid style={gray!25}, xtick pos=bottom, ytick pos=left},
+  qbar/.style={ybar stacked, unbounded coords=jump, bar width=4pt, table/x=x, xtick={0,...,21}, xmin=-0.7, xmax=21.7}}
+\definecolor{cLive}{HTML}{2a6fdb}\definecolor{cInt}{HTML}{e8702a}\definecolor{cDead}{HTML}{1aa37a}
+\definecolor{cTorch}{HTML}{d1495b}\definecolor{cCache}{HTML}{f2a7b5}\definecolor{cCtx}{HTML}{9a9a9a}
+\definecolor{cA}{HTML}{2a6fdb}\definecolor{cB}{HTML}{e8702a}\definecolor{cC}{HTML}{1aa37a}\definecolor{cD}{HTML}{8e5ac8}
 \usetikzlibrary{positioning,arrows.meta,decorations.pathreplacing,calc}
 \usepackage[hidelinks]{hyperref}
 \usepackage[capitalise,noabbrev]{cleveref}
@@ -216,22 +226,140 @@ go to PyTorch.
 % ---------------------------------------------------------------
 \section{Implementation}
 \label{sec:impl}
-% TODO(claude): fill after code review
+All changes are command-line switches that are off by default; with every switch off
+the program behaves exactly as before. The memory changes add 83 lines
+(\code{utility/lifetime.py}) and about 60 lines in \code{main.py} and the slab pool.
+
+\textbf{Measurement.} \code{-{}-mem\_trace} records, per operator, every slab allocation
+(start block, blocks, requested bytes), the slab blocks each operator reads, and PyTorch's
+allocated, reserved and split-free bytes. Reads are captured by replacing
+\code{tensor\_group} with a dictionary subclass that logs each lookup and maps the tensor's
+\emph{device address} (\code{data\_ptr} and its size and strides) to slab blocks, so
+renamed columns, slices and outputs without a block tag are all attributed correctly.
+Records stay in host lists and are written when the query ends, so tracing allocates no
+GPU memory; with and without tracing, all query-level memory counters are identical.
+Slab policies are evaluated by replaying the trace in a pure-Python copy of the pool:
+placement changes neither which allocations happen nor which data is read, so the replay
+is exact.
+
+\textbf{S3.} Before a plan runs, \code{last\_uses} maps every column to the last operator
+whose Spark \code{Input} list (or, for the output operator, \code{Output} list) contains it.
+After operator $j$ (\cref{fig:reclaim}), \code{free\_dead} deletes every column whose last
+use is $\le j$, collects the slab blocks still covered by the remaining columns' device
+address ranges, and returns every allocation none of whose blocks is covered. Mask
+columns that TQP adds for late materialization are not in Spark's lists and are kept.
+Two test switches check the safety argument: \code{-{}-poison\_freed} fills returned blocks
+with \code{0xFF}, so any read after free corrupts the result, and \code{-{}-check\_refs}
+scans all live CUDA tensors with Python's garbage collector after each release and fails
+if one points into a returned block.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\scriptsize,node distance=2.5mm,
+  box/.style={draw,rounded corners=1.5pt,align=center,inner sep=2.5pt,fill=#1},box/.default=white]
+  \node[box=gray!12] (plan) {plan: last reader\\of each column};
+  \node[box,right=of plan] (run) {run operator $j$};
+  \node[box,right=of run] (drop) {drop columns with\\last use $\le j$};
+  \node[box,below=4mm of drop] (cover) {blocks covered by\\remaining columns};
+  \node[box=blue!10,left=of cover] (free) {return uncovered\\allocations};
+  \node[box,left=of free] (next) {$j{+}1$};
+  \draw[-{Latex[length=1.5mm]}] (plan)--(run);
+  \draw[-{Latex[length=1.5mm]}] (run)--(drop);
+  \draw[-{Latex[length=1.5mm]}] (drop)--(cover);
+  \draw[-{Latex[length=1.5mm]}] (cover)--(free);
+  \draw[-{Latex[length=1.5mm]}] (free)--(next);
+  \draw[-{Latex[length=1.5mm]}] (next.north)--(run.south);
+\end{tikzpicture}
+\caption{Executor-level reclamation after each operator (S3).}
+\label{fig:reclaim}
+\end{figure}
+
+\textbf{S4.} \code{-{}-coalesce\_every} makes the pool merge adjacent free runs on every
+free instead of every sixth. Placement stays first-fit, which needs no threshold.
+
+\textbf{S2.} With \code{-{}-slab\_eps}~$\varepsilon$, after loading a query's plans and
+before it runs, \code{max\_live\_columns} computes $N$ by sweeping the plan: a column is
+born at the first operator that outputs it and dies after its last use (or at the plan's
+end without S3); masks live to the end. The pool, still empty at that point, is reset to
+blocks of $\lfloor \varepsilon P / N \rfloor$\,MB (at least 1\,MB).
+
+\textbf{P1.} Expandable segments are enabled with the environment variable
+\code{PYTORCH\_ALLOC\_CONF=expandable\_segments:True}; no code changes.
+\code{-{}-empty\_cache\_per\_op} calls \code{torch.cuda.empty\_cache()} after each operator.
+
+\textbf{Correctness.} Results are compared with the SF~1 reference shipped with the
+repository using its test rule (10 significant digits). Bit-exact comparison is not
+meaningful: the unmodified system already varies in the 16th--17th digit between runs,
+because GPU floating-point sums are not ordered. With all switches on, plus
+\code{-{}-poison\_freed} and \code{-{}-check\_refs}, all 22 queries match the reference.
 
 % ---------------------------------------------------------------
 \section{Experiments}
 \label{sec:exp}
-% TODO(claude): fill with results
+\textbf{Setup.} One RTX~5080 (16.6\,GB usable as reported by PyTorch), PyTorch~2.14 with
+CUDA~13.0, TPC-H data at SF~5, 7 and 10, all 22 queries. Each query runs in a fresh
+process. The slab size for each (query, SF) is the one an adaptive search found to run the
+unmodified system, so neither side fails; memory metrics do not depend on it as long as the
+query runs. We report the \emph{device need} of a run: the slab high-water mark (including
+holes), plus PyTorch's reserved memory outside the slab, plus the CUDA context (0.30\,GB).
+Memory is measured without warm-up (a warm-up changes no memory counter); time is measured
+after one warm-up run with tracing off. The GPU was shared with another user's jobs:
+each run starts only when free memory covers the query's measured need, and timing and
+OOM-boundary runs start only when the GPU is otherwise idle.
+
+\textbf{OOM at SF 10.} \Cref{fig:ranking} ranks the queries by device need. Q21 does not
+run at any slab size, and Q9 needs 16.15\,GB of the 16.6\,GB device.
 
 \begin{figure}[t]
 \centering
-% \includegraphics[width=\columnwidth]{figures/ranking.png}
-\caption{Total GPU need per query at SF~10 (slab peak + PyTorch peak + context), sorted;
-dashed line: device capacity.}
+\pgfplotstableread[col sep=comma]{plotdata/ranking_sf10.csv}\rank
+\begin{tikzpicture}
+\begin{axis}[qbar, width=\columnwidth, height=3.6cm, ymin=0, ymax=19.5,
+  xticklabels from table={\rank}{qid}, ylabel={GB}, xlabel={TPC-H query (SF 10)},
+  legend columns=3]
+\addplot[fill=cCtx,draw=none] table[y=ctx]{\rank};
+\addplot[fill=cLive,draw=none] table[y=slab]{\rank};
+\addplot[fill=cTorch,draw=none] table[y=torch]{\rank};
+\legend{context, slab peak, PyTorch reserved}
+\coordinate (capL) at (axis cs:-0.6,16.61); \coordinate (capR) at (axis cs:21.6,16.61);
+\node[font=\tiny,rotate=90,anchor=west] at (axis cs:0,0.3) {OOM};
+\end{axis}
+\draw[dashed] (capL) -- (capR) node[pos=0.97,above left,font=\tiny,inner sep=1pt]{usable device memory};
+\end{tikzpicture}
+\caption{Device need per query at SF~10, highest first. Q21 fails at every slab size.}
 \label{fig:ranking}
 \end{figure}
 
-% ---------------------------------------------------------------
+\textbf{Where the memory goes.} \Cref{fig:breakdown} splits each query's need at SF~10.
+Dead data held by the slab is the largest single part for most queries; block padding
+(S2) is large for queries with many small allocations; PyTorch's temporaries dominate the
+two queries closest to the limit (Q9, Q21 at SF~7), and cached-but-unused PyTorch memory (P1)
+is small except for a few queries.
+
+\begin{figure*}[t]
+\centering
+\pgfplotstableread[col sep=comma]{plotdata/breakdown_sf10.csv}\brk
+\begin{tikzpicture}
+\begin{axis}[qbar, bar width=7pt, width=\textwidth, height=4.2cm, ymin=0, ymax=17,
+  xticklabels from table={\brk}{qid}, ylabel={GB}, xlabel={TPC-H query (SF 10), sorted by device need},
+  legend columns=6]
+\addplot[fill=cCtx,draw=none] table[y=ctx]{\brk};
+\addplot[fill=cLive,draw=none] table[y=live]{\brk};
+\addplot[fill=cInt,draw=none] table[y=internal]{\brk};
+\addplot[fill=cDead,draw=none] table[y=dead]{\brk};
+\addplot[fill=cTorch,draw=none] table[y=torch_inuse]{\brk};
+\addplot[fill=cCache,draw=none] table[y=torch_cached]{\brk};
+\legend{context, slab: live, slab: block padding (S2), slab: dead data (S3), PyTorch: in use, PyTorch: cached unused (P1)}
+\node[font=\tiny,rotate=90,anchor=west] at (axis cs:0,0.3) {OOM};
+\end{axis}
+\end{tikzpicture}
+\caption{Composition of the device need at SF~10 without any optimization. The slab
+part is taken when the slab reaches its high-water mark (at the end of the query).}
+\label{fig:breakdown}
+\end{figure*}
+
+% TODO(claude): slab configs, eps, P1, P1+S3, max SF
+
 \section{Results}
 \label{sec:results}
 
