@@ -1,17 +1,17 @@
-# 2026-10-21 结果不确定性检查
+# 2026-10-21 Result Nondeterminism Check
 
-## 目的
-配置对比实验（`../2026-10-21-configs/`）中有两组结果与参考运行不一致：SF10 Q16（7 个配置彼此一致，只有参考运行不同）和 SF5 Q21 的 `p1_empty`。确认它们是原系统的偶发行为，而不是内存优化造成的。
+## Objective
+The configuration comparison (`../2026-10-21-configs/`) had two sets of results that differed from the reference: SF10 Q16 (all 7 configurations agree, with only the reference differing) and SF5 Q21 with `p1_empty`. Confirm that these are intermittent behaviors of the original system rather than effects of memory optimization.
 
-## 方法
-在同样的池大小下重复运行，记录 `results.out` 的 sha256 和前两行：
-- 未修改程序：SF5 Q21 × 5，SF10 Q16 × 5；
-- `--empty_cache_per_op`：SF5 Q21 × 5。
-每次启动前要求 GPU 安静（≤ 0.5 GB）。服务器日志：`~/runs/tqp/20261021-024350-determinism-check/`、`~/runs/tqp/20261021-024658-determinism-p1-empty/`。
+## Method
+Repeat runs with the same pool sizes, recording the sha256 and first two lines of `results.out`:
+- Unmodified program: SF5 Q21 × 5, SF10 Q16 × 5;
+- `--empty_cache_per_op`: SF5 Q21 × 5.
+Require a quiet GPU (usage $\le 0.5\,\mathrm{GB}$) before each run. Server logs: `~/runs/tqp/20261021-024350-determinism-check/`, `~/runs/tqp/20261021-024658-determinism-p1-empty/`.
 
-## 结果（`runs.txt`）
-- 未修改程序的 SF10 Q16 五次完全相同，且与 7 个优化配置的结果相同（Brand#59 一组为 64）；配置对比里的那次参考运行给出 72。同一个未修改程序给出过两种结果。
-- SF5 Q21：未修改程序五次、`--empty_cache_per_op` 五次，全部与参考运行相同；配置对比里 `p1_empty` 那一次多出两个计数为 25、24 的供应商。
+## Results (`runs.txt`)
+- All five SF10 Q16 runs of the unmodified program are identical and match the 7 optimized configurations (Brand#59 has a count of 64); the reference run in the configuration comparison produced 72. The same unmodified program has produced two different results.
+- SF5 Q21: all five unmodified runs and five `--empty_cache_per_op` runs match the reference; the single `p1_empty` run in the configuration comparison included two extra suppliers with counts of 25 and 24.
 
-## 解释
-TQP 的哈希聚合（`operators/aggregate.py:320-325`）每次运行随机生成哈希系数，并且只按哈希值区分组：两个不同的组哈希相同就被合并，计数相加。两次异常都是某个组的计数变大（64 → 72；多出计数偏大的供应商），符合"偶发合并"。这是原系统的行为，与内存优化无关；在 SF5–10 的 520 次比较（S3 实验 65 次、配置对比 455 次）中出现 2 次。
+## Explanation
+TQP's hash aggregation (`operators/aggregate.py:320-325`) generates random hash coefficients on each run and distinguishes groups solely by hash value: two distinct groups with the same hash are merged and their counts summed. Both anomalies involve inflated group counts (64 → 72; extra suppliers with inflated counts), consistent with occasional merging. This is behavior of the original system, unrelated to memory optimization; it occurred 2 times in 520 comparisons at SF5–10 (65 in the S3 experiment, 455 in the configuration comparison).

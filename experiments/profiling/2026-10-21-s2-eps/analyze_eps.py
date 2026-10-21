@@ -94,81 +94,81 @@ def figures(rows):
 
 
 def write_readme(rows, summary, mismatches, planning_failures):
-    counts = ', '.join(f'SF{sf}：{sum(r["sf"] == sf for r in rows) // 10} 条'
+    counts = ', '.join(f'SF{sf}: {sum(r["sf"] == sf for r in rows) // 10} queries'
                        for sf in sorted({r['sf'] for r in rows}))
     results = []
     for setting, eps in SETTINGS:
         group = [r for r in rows if r['sf'] == 10 and r['setting'] == setting and r['merge'] == 'every']
-        results.append(f'- SF10 / `{setting}` / `every`：高水位合计 '
-                       f'{sum(r["highwater_bytes"] for r in group) / GB:.3f} GB，平均内部碎片 / 池容量 '
-                       f'{100 * statistics.mean(r["internal_bytes"] / r["pool_bytes"] for r in group):.3f}%。')
-    (HERE / 'README.md').write_text(r'''# 2026-10-21 S2：方法 A 的 ε 与 slab 碎片离线回放
+        results.append(f'- SF10 / `{setting}` / `every`: total high-water mark '
+                       f'{sum(r["highwater_bytes"] for r in group) / GB:.3f} GB, mean internal fragmentation / pool capacity '
+                       f'{100 * statistics.mean(r["internal_bytes"] / r["pool_bytes"] for r in group):.3f}%.')
+    (HERE / 'README.md').write_text(r'''# 2026-10-21 S2: Offline Replay of Method A's ε and Slab Fragmentation
 
-## 目的
-在 S3 实测释放时机上，比较固定 40 MB 与方法 A 规划的块大小，量化内部碎片与 slab 高水位的变化，并检查理论上限。
-不模拟 PyTorch 侧显存，不据此推断 GPU 耗时。
+## Objective
+Using measured S3 reclamation timings, compare fixed 40 MB blocks with block sizes planned by method A, quantify changes in internal fragmentation and slab high-water mark, and check theoretical bounds.
+Do not simulate PyTorch-side memory or infer GPU runtime from this analysis.
 
-## 配置与运行
-- 本地在 `experiments/profiling/` 下运行 `python3 -B 2026-10-21-s2-eps/analyze_eps.py`；分析仅用 Python 标准库，无 torch。
-- 服务器在同一目录、项目环境中运行 `python3 -B 2026-10-21-s2-eps/plan_n_live.py`，
-  从 22 个查询 pickle 重建 `plan_n_live.csv`；该脚本依赖服务器的 torch 和计划反序列化环境，本地不运行。
-- 输入复用 S3 的 `load_traces()`：`trace-rerun/` 按 SF / 查询完整替换 `trace/` 对应记录；只分析成功查询。SF10 Q21 无数据，不补零。
-- 单位为十进制：$1\,\mathrm{MB}=10^6$ 字节，$1\,\mathrm{GB}=10^9$ 字节
+## Configuration and Execution
+- Run `python3 -B 2026-10-21-s2-eps/analyze_eps.py` locally from `experiments/profiling/`; analysis uses only the Python standard library, without torch.
+- On the server, run `python3 -B 2026-10-21-s2-eps/plan_n_live.py` from the same directory in the project environment
+  to rebuild `plan_n_live.csv` from the 22 query pickles; this script depends on the server's torch and plan-deserialization environment and is not run locally.
+- Reuse S3's `load_traces()` for input: `trace-rerun/` fully replaces the corresponding `trace/` records by SF / query; analyze successful queries only. SF10 Q21 has no data and is not zero-filled.
+- Decimal units: $1\,\mathrm{MB}=10^6$ bytes, $1\,\mathrm{GB}=10^9$ bytes
 
-## 方法
-保留算子、申请、释放的 CSV 行顺序。原始块起点仅用于在释放时匹配当前申请，匹配后使用独立申请编号；
-块地址复用不会混淆生命周期。未出现在释放记录中的申请保留至查询结束。
-每个算子先申请，再记录释放前状态，最后按原始顺序释放。
-取第一次达到最大占用范围末端的算子结束时刻，与 S3 的快照定义一致；算子内只有申请，所以此定义不会遗漏更高的地址峰值。
+## Method
+Preserve CSV row order for operators, allocations, and frees. Original starting blocks are used only to match the current allocation when freeing; independent allocation IDs are used after matching,
+so block-address reuse does not confuse lifetimes. Allocations absent from free records remain until query completion.
+For each operator, allocate first, record the state before freeing, then free in the original order.
+Use the first operator end at which the occupied-extent endpoint reaches its maximum, matching S3's snapshot definition; only allocations occur within an operator, so this definition cannot miss a higher address peak.
 
-复用 baseline 的 `Pool`，first-fit 按空闲列表找首个可用段并从低端分配；释放追加到列表末尾。
-`lazy` 每第六次释放排序并合并，`every` 每次释放合并。回放池容量取全部申请向上取整后容量之和，保证不受容量上限约束；
-不把实测池容量作为回放限制。有限池的尾段可能改变 first-fit 路径，因此固定块回放也逐行与实测比较。
+Reuse baseline's `Pool`: first-fit selects the first available segment in free-list order and allocates from its low end; frees append to the end of the list.
+`lazy` sorts and coalesces on every sixth free; `every` coalesces on every free. Replay pool capacity is the sum of all rounded-up allocation capacities, ensuring capacity is not a constraint;
+the measured pool capacity does not limit replay. The tail segment of a finite pool may change the first-fit path, so fixed-block replay is also compared row by row with measurements.
 
-计划列数取 `n_live_free_dead`，各计划使用 `max_live_columns(p.ops_idx, p.ops_dict, True)` 后取最大；
-另存不开 S3 的 `n_live_no_free` 供复现原表。池容量取合并后该查询的 `gpu_pool_gb`。
+Use `n_live_free_dead` as the planned column count, taking the maximum of `max_live_columns(p.ops_idx, p.ops_dict, True)` over all plans;
+also save `n_live_no_free` without S3 to reproduce the original table. Pool capacity is the query's `gpu_pool_gb` after merging the records.
 
 $$
 b_{\mathrm{MB}}=\max\left(1,\left\lfloor\frac{\varepsilon P}{N\,10^6}\right\rfloor\right),\qquad b=10^6 b_{\mathrm{MB}}
 $$
 
-$N$ 取“进入算子时仍存活的列数 + 该算子的输出列数”的最大值（每个输出拿到一块新申请，而输入在算子运行期间仍占着）。
-同时占用的申请数不超过 $N$，每项取整浪费不超过一块，所以 $I\le Nb$；本实验逐行检验。1 MB 下限还可能破坏 $Nb\le\varepsilon P$，
-所以脚本独立检查这条规划不等式；固定 40 MB 无对应的 ε 上限。
+$N$ is the maximum of "columns still live on entry to an operator + that operator's output columns" (each output receives a new allocation while inputs remain occupied during operator execution).
+The number of simultaneously occupied allocations is at most $N$, and rounding wastes at most one block per allocation, so $I\le Nb$; this experiment checks every row. The 1 MB minimum can also violate $Nb\le\varepsilon P$,
+so the script checks this planning inequality separately; fixed 40 MB blocks have no corresponding ε bound.
 
-## 派生列定义
-令 $A$ 为首次最大高水位快照内的申请集合，$s_a$ 为请求字节，$p_a$ 为回放块起点，$c_a=\max(1,\lceil s_a/b\rceil)$ 为占块数
+## Derived Column Definitions
+Let $A$ be the set of allocations in the first maximum-high-water snapshot, $s_a$ the requested bytes, $p_a$ the replay starting block, and $c_a=\max(1,\lceil s_a/b\rceil)$ the occupied block count
 
-| 列 | 定义 |
+| Column | Definition |
 |---|---|
-| `sf`, `qid`, `setting`, `merge` | 规模、查询、块大小设置与合并时机；`setting` 为 `40MB` 或 ε 的十进制字符串 |
-| `block_mb`, `n_live`, `pool_bytes` | $b/10^6$、$N$、$P$ |
+| `sf`, `qid`, `setting`, `merge` | Scale, query, block-size setting, and coalescing timing; `setting` is `40MB` or a decimal string for ε |
+| `block_mb`, `n_live`, `pool_bytes` | $b/10^6$, $N$, $P$ |
 | `highwater_bytes` | $H=\max_t\max_{a\in A_t}(p_a+c_a)b$ |
 | `internal_bytes` | $I=\sum_{a\in A}(c_ab-s_a)$ |
-| `internal_frac` | $I/H$，包含空洞的高水位为分母 |
+| `internal_frac` | $I/H$, using the high-water mark including holes as the denominator |
 | `bound_bytes` | $Nb$ |
-| `bound_holds` | $I\le Nb$，不等同于规划条件 $Nb\le\varepsilon P$ |
+| `bound_holds` | $I\le Nb$, distinct from the planning condition $Nb\le\varepsilon P$ |
 
-## 图
-英文 SVG 由 `svgplot.py` 生成，并调用 `render_png` 输出同名 PNG。
+## Figures
+English SVGs are generated by `svgplot.py`, with `render_png` producing PNGs of the same name.
 
 ![Internal fragmentation](figures/1_internal_vs_eps.svg)
 
-图 1 使用 SF10 各查询 $I/P$ 的算术平均，仅绘制 `every`；参考线为 $y=\varepsilon$，固定 40 MB 处不画参考点
+Figure 1 uses the arithmetic mean of per-query $I/P$ at SF10 and plots only `every`; the reference line is $y=\varepsilon$, with no reference point for fixed 40 MB blocks
 
 ![High-water mark](figures/2_highwater_vs_eps.svg)
 
-图 2 为 SF10 所有可用查询的 $H$ 合计，分别绘制 `lazy` 与 `every`；合计不是查询并发执行的池容量
+Figure 2 sums $H$ over all available SF10 queries, plotting `lazy` and `every` separately; totals do not represent pool capacity for concurrent query execution
 
-## 主要结果
-''' + f'- 数据覆盖：{counts}；输出 {len(rows)} 行。\n'
+## Main Results
+''' + f'- Data coverage: {counts}; {len(rows)} output rows.\n'
         + '\n'.join(results)
-        + f'\n- 内部碎片上限不成立：{sum(not r["bound_holds"] for r in rows)} 行。'
-        + f'\n- 规划上限不成立：{len(planning_failures)} 个 SF / 查询 / ε 组合（不重复计算两种合并时机）。'
+        + f'\n- Internal fragmentation bound violations: {sum(not r["bound_holds"] for r in rows)} rows.'
+        + f'\n- Planning bound violations: {len(planning_failures)} SF / query / ε combination (counting the two coalescing timings only once).'
         + ('\n' + '\n'.join(planning_failures) if planning_failures else '')
-        + f'\n- 40 MB / lazy 与 S3 实测高水位逐行比较：{len(mismatches)} 行不一致。'
-        + ('\n' + '\n'.join(mismatches) if mismatches else '全部 65 行相等。')
-        + '\n\n## 汇总\n平均碎片分别报告高水位分母与实测池容量分母；合计单位 GB。\n\n```text\n'
+        + f'\n- Row-by-row comparison of 40 MB / lazy with measured S3 high-water marks: {len(mismatches)} mismatches.'
+        + ('\n' + '\n'.join(mismatches) if mismatches else ' All 65 rows match.')
+        + '\n\n## Summary\nMean fragmentation is reported with both the high-water mark and measured pool capacity as denominators; totals are in GB.\n\n```text\n'
         + summary + '\n```\n', encoding='utf-8')
 
 

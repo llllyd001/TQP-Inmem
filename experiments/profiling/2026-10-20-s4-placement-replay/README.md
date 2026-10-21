@@ -1,69 +1,68 @@
-# 2026-10-20 S4：slab 放置与合并时机离线回放
+# 2026-10-20 S4: Offline Replay of Slab Placement and Coalescing Timing
 
-## 目的
-使用 baseline 原始记录，理想化地在申请最后一次被读的算子结束后归还全部块，比较不同放置规则和合并时机的最小池容量。只分析 slab，不包含 PyTorch 侧显存，也不修改执行器。
+## Objective
+Use raw baseline traces to compare minimum pool capacity under different placement rules and coalescing timings, ideally reclaiming all blocks after the operator that last reads an allocation finishes. Analyze only the slab, excluding PyTorch-side memory, without modifying the executor.
 
-## 配置与运行
-- 输入为相邻 baseline 实验的 `trace/queries.csv`、`ops.csv`、`allocs.csv`、`reads.csv`。
-- 共 65 条记录：SF5、SF7 各 22 条，SF10 为 21 条；SF10 Q21 无记录，不补零、不替用 SF7。
-- 块大小 $B = 40{,}000{,}000$ 字节；十进制 $1\,\mathrm{GB} = 10^9$ 字节
-- 在 `experiments/profiling/` 下运行 `python3 -B 2026-10-20-s4-placement-replay/analyze_s4.py`。
-- 数据分析仅用标准库，无 torch / GPU；SVG 使用 `svgplot.py`，PNG 使用其 `render_png`（本地 Chrome）。
-- 本次沙箱禁止 Chrome 所需的 socket 操作，常规命令在 PNG 阶段退出；CSV、SVG、README 已先写出。
-  本次 PNG 通过临时运行包装器调用本机已有的 librsvg/Cairo 生成；未安装包、未向脚本加入该依赖。
+## Configuration and Execution
+- Inputs are `trace/queries.csv`, `ops.csv`, `allocs.csv`, and `reads.csv` from the adjacent baseline experiment.
+- 65 traces total: 22 each at SF5 and SF7, and 21 at SF10; SF10 Q21 has no trace and is neither zero-filled nor replaced with SF7.
+- Block size: $B = 40{,}000{,}000$ bytes; decimal units: $1\,\mathrm{GB} = 10^9$ bytes
+- Run `python3 -B 2026-10-20-s4-placement-replay/analyze_s4.py` from `experiments/profiling/`.
+- Data analysis uses only the standard library, without torch / GPU; SVG generation uses `svgplot.py`, and PNG generation uses its `render_png` (local Chrome).
+  PNGs for this run were generated with the existing local librsvg/Cairo installation through a temporary execution wrapper; no packages were installed and this dependency was not added to the script.
 
-## 方法
-复用 `analyze_baseline.py` 的 `load_traces`、`allocation_lifetimes` 和 `Pool`。
-保持算子原始行顺序；同一算子内按原始块起点、块数、请求字节排序申请。只考虑 `in_slab` 读取，以块范围重叠判断生命周期。
-同一算子先完成全部申请，再按原申请顺序释放到期申请；未被读取的申请在其申请算子结束后释放。生命周期始终来自原始地址，不使用回放后的地址重新匹配读取。
+## Method
+Reuse `load_traces`, `allocation_lifetimes`, and `Pool` from `analyze_baseline.py`.
+Preserve the original operator row order; within each operator, sort allocations by original starting block, block count, and requested bytes. Consider only `in_slab` reads, using block-range overlap to determine lifetimes.
+Complete all allocations for an operator before freeing expired allocations in original allocation order; unread allocations are freed after their allocating operator finishes. Lifetimes always come from original addresses; replayed addresses are not used to rematch reads.
 
-| 放置规则 | 定义 |
+| Placement rule | Definition |
 |---|---|
-| `first` | 按空闲列表顺序找到第一个足够大的段，取低端；列表未必按地址排序 |
-| `best` | 在所有足够大的段中取最短者，并列取最低地址，取段低端 |
-| `lifetime-t` | 当 $\operatorname{last\_use}(a)-i_a\le t$ 时，按地址从高到低找第一个足够大的段并取高端；否则沿用 `first`，取段低端；$t\in\{0,1,2\}$ |
-| `lazy` | 每次释放追加到空闲列表尾部，第六次释放时排序并合并相邻段，计数清零 |
-| `every` | 每次释放都排序并合并相邻段 |
+| `first` | Select the first sufficiently large segment in free-list order and allocate from its low end; the list is not necessarily address-sorted |
+| `best` | Select the shortest sufficiently large segment, breaking ties by lowest address, and allocate from its low end |
+| `lifetime-t` | When $\operatorname{last\_use}(a)-i_a\le t$, scan addresses from high to low for the first sufficiently large segment and allocate from its high end; otherwise use `first` and allocate from the low end; $t\in\{0,1,2\}$ |
+| `lazy` | Append each freed segment to the free list; on the sixth free, sort and coalesce adjacent segments, then reset the counter |
+| `every` | Sort and coalesce adjacent segments on every free |
 
-先确认 H₀ 容量能成功，再在下限与 H₀ 之间二分。由于放置轨迹可能随容量改变，不能假设成功性单调；额外逐块检查下限到二分候选之间的容量，找到全局最小值。最后再次回放该容量及少一块的容量，分别确认成功和失败。
-H₀ 仍失败时 CSV 的容量与时间均留空；空值不作为零计入汇总；合计显示 NA，中位数和最大耗时仅统计成功项；图中省略不完整系列。
+First confirm success at capacity $H_0$, then binary-search between the lower bound and $H_0$. Placement may change with capacity, so success cannot be assumed monotonic; additionally check every block capacity from the lower bound to the binary-search candidate to find the global minimum. Finally, replay at that capacity and one block less to confirm success and failure, respectively.
+If replay still fails at $H_0$, leave capacity and time blank in the CSV; blanks are not counted as zero in summaries. Totals display NA, medians and maximum times include only successful cases, and incomplete series are omitted from figures.
 
-## 指标定义
-| 指标 | 定义 |
+## Metric Definitions
+| Metric | Definition |
 |---|---|
-| 申请算子序号 | $i_a$，按原始算子顺序从零编号 |
-| `last_use` | $\operatorname{last\_use}(a)=\max\{j: \text{算子 }j\text{ 的 slab 读取与申请 }a\text{ 的块范围重叠}\}$；无重叠读取时取 $i_a$ |
-| `highwater_bytes` | $H_0=B\sum_a n_a$，其中 $n_a$ 为申请块数；检查与 baseline 一致 |
-| `floor_blocks` | $\max_j\sum_{a:i_a\le j\le\operatorname{last\_use}(a)}n_a$，算子内申请完成、释放之前的最大占块数 |
-| `floor_bytes` | $B\cdot\mathrm{floor\_blocks}$；包含块内碎片，与真实请求字节峰值不同 |
-| `min_pool_blocks` | $\min\{C\in\mathbb{Z}: \text{容量为 }C\text{ 块时回放成功}\}$ |
-| `<放置>_<合并>_pool_bytes` | $B\cdot\mathrm{min\_pool\_blocks}$ |
-| `<放置>_<合并>_merge_us` | 最小容量确认回放中，所有排序与合并的 `time.perf_counter` 时间之和，单位 $\mu\mathrm{s}$；不累计搜索回放耗时 |
+| Allocating operator index | $i_a$, zero-based in original operator order |
+| `last_use` | $\operatorname{last\_use}(a)=\max\{j: \text{slab reads of operator }j\text{ overlap the block range of allocation }a\}$; use $i_a$ if no read overlaps |
+| `highwater_bytes` | $H_0=B\sum_a n_a$, where $n_a$ is the allocation's block count; checked against baseline |
+| `floor_blocks` | $\max_j\sum_{a:i_a\le j\le\operatorname{last\_use}(a)}n_a$, the maximum occupied block count after allocations and before frees within an operator |
+| `floor_bytes` | $B\cdot\mathrm{floor\_blocks}$; includes internal block fragmentation and differs from the peak of actual requested bytes |
+| `min_pool_blocks` | $\min\{C\in\mathbb{Z}: \text{replay succeeds with a capacity of }C\text{ blocks}\}$ |
+| `<placement>_<coalescing>_pool_bytes` | $B\cdot\mathrm{min\_pool\_blocks}$ |
+| `<placement>_<coalescing>_merge_us` | Sum of `time.perf_counter` durations for all sorting and coalescing during the confirmation replay at minimum capacity, in $\mu\mathrm{s}$; excludes search replays |
 
-合并时间包含查询末尾的释放，计时不含释放追加、放置扫描及生命周期计算。它是本机 Python 单次运行的微秒级估计，有计时器和调度噪声，不能当作 GPU 查询加速比。
+Coalescing time includes frees at query end but excludes appending freed segments, placement scans, and lifetime computation. It is a microsecond-scale estimate from a single local Python run, subject to timer and scheduling noise, and must not be interpreted as a GPU query speedup.
 
-## 文件与图
-| 文件 | 内容 |
+## Files and Figures
+| File | Contents |
 |---|---|
-| `analyze_s4.py` | 回放、全局最小容量验证、CSV、绘图及本说明生成 |
-| `s4_replay.csv` | 每个 SF / 查询一行；四列参照指标及十组容量、合并时间 |
-| `figures/1_pool_need_sf10.svg`、`.png` | SF10 七个系列；lifetime 阈值按 SF10 的 every 合计选择，并列选较小阈值 |
-| `figures/2_summary.svg`、`.png` | 按 SF 分组，十种组合及 floor 合计；合计不是同时运行所有查询的容量 |
+| `analyze_s4.py` | Replay, global minimum capacity validation, CSV output, plotting, and generation of these notes |
+| `s4_replay.csv` | One row per SF / query; four reference columns and ten sets of capacity and coalescing time |
+| `figures/1_pool_need_sf10.svg`, `.png` | Seven SF10 series; the lifetime threshold is selected by the SF10 total for every, breaking ties in favor of the smaller threshold |
+| `figures/2_summary.svg`, `.png` | Grouped by SF, with totals for ten combinations and floor; totals do not represent capacity for running all queries concurrently |
 
 ![SF10 pool need](figures/1_pool_need_sf10.svg)
 
 ![Summary](figures/2_summary.svg)
 
-## 主要结果
-- SF5：H₀ 合计 50.04 GB；`first_lazy` 26.20 GB；最小合计 25.48 GB（`lifetime-1_every`）；floor 合计 25.48 GB。
-- SF7：H₀ 合计 65.60 GB；`first_lazy` 37.64 GB；最小合计 36.40 GB（`lifetime-1_every`、`lifetime-2_every`）；floor 合计 36.24 GB。
-- SF10：H₀ 合计 71.48 GB；`first_lazy` 43.84 GB；最小合计 42.68 GB（`lifetime-2_every`）；floor 合计 42.56 GB。
-- SF10 图选用 `lifetime-2_every`。
-- 全局检查修正了 0 个二分候选；成功的 650 组均完成最小值与少一块验证。
-- 所有组合不低于 floor；`first_lazy` 不超过 baseline 的 `highwater_free_bytes`。
+## Main Results
+- SF5: $H_0$ total 50.04 GB; `first_lazy` 26.20 GB; minimum total 25.48 GB (`lifetime-1_every`); floor total 25.48 GB.
+- SF7: $H_0$ total 65.60 GB; `first_lazy` 37.64 GB; minimum total 36.40 GB (`lifetime-1_every`, `lifetime-2_every`); floor total 36.24 GB.
+- SF10: $H_0$ total 71.48 GB; `first_lazy` 43.84 GB; minimum total 42.68 GB (`lifetime-2_every`); floor total 42.56 GB.
+- The SF10 figure uses `lifetime-2_every`.
+- Global checks corrected 0 binary-search candidates; all 650 successful cases were validated at the minimum capacity and one block less.
+- All combinations are at least floor; `first_lazy` does not exceed baseline's `highwater_free_bytes`.
 
-## 汇总
-合计与中位数单位 GB；最大合并耗时为该 SF 内单条查询的最大值。
+## Summary
+Totals and medians are in GB; maximum coalescing time is the largest single-query value within that SF.
 
 ```text
 SF  Rule                 Sum_GB  Median_GB  Max_merge_us  Success

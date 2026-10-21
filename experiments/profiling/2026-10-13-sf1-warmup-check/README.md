@@ -1,92 +1,92 @@
-# 2026-10-13 · SF1 · warmup 会不会影响查询级显存测量
+# 2026-10-13 · SF1 · Does Warmup Affect Query-Level GPU Memory Measurements?
 
-## 目的
-判断查询级显存测量需不需要先做 warmup。
+## Objective
+Determine whether query-level GPU memory measurements require warmup.
 
-- **假设：** warmup 只影响时间，不影响显存。理由是张量需要多少字节，和是不是第一次运行无关。
-- **判定标准：** 三种条件下，池高水位、真实数据量、借用次数、池外临时峰值和 reserved 峰值都完全相同（逐字节相等），就说明测显存不需要 warmup。时间应该明显不同，作为对照。
+- **Hypothesis:** warmup affects timing but not GPU memory. The number of bytes a tensor requires does not depend on whether this is the first run.
+- **Criterion:** if the pool high-water mark, actual data size, allocation count, transient peak outside the pool, and reserved peak are identical (byte for byte) under all three conditions, GPU memory measurements do not require warmup. Timing should differ substantially as a control.
 
-## 环境与代码
-- dbresearch1 · NVIDIA GeForce RTX 5080（16.6 GB）· torch 2.14.0+cu130 · driver 590.48
-- 代码：`memory-optimization` @ `4f9338b`，仓库代码没有未提交的改动
-- 数据：TPC-H SF1；GPU 池 4 GB，块大小 40 MB
-- 运行时没有加 `--log`，原始输出完整保存在本目录的 `stdout.log`，服务器上没有留下文件
+## Environment and Code
+- dbresearch1 · NVIDIA GeForce RTX 5080 (16.6 GB) · torch 2.14.0+cu130 · driver 590.48
+- Code: `memory-optimization` @ `4f9338b`, with no uncommitted repository code changes
+- Data: TPC-H SF1; GPU pool: 4 GB, block size: 40 MB
+- Runs did not use `--log`; complete raw output is saved in `stdout.log` in this directory, with no files left on the server
 
-## 方法
-- 每次运行都是一个**独立的新进程**，用 `experiments/profiling/measure_warmup.py` 测量。
-- 查询：Q1（大聚合）、Q2（池高水位最高）、Q9、Q21（池外临时峰值最高的两条）。
-- 每条查询测三种条件：
+## Method
+- Each run uses a **separate fresh process**, measured with `experiments/profiling/measure_warmup.py`.
+- Queries: Q1 (large aggregation), Q2 (highest pool high-water mark), Q9, and Q21 (the two highest transient peaks outside the pool).
+- Measure each query under three conditions:
 
-| 条件（label） | 做法 |
+| Condition (label) | Procedure |
 | --- | --- |
-| `first run` | 新进程里第一次运行这条查询 |
-| `repeat in same process` | 同一个进程里紧接着再运行一次 |
-| `after warmup` | 另起一个新进程，先运行 TQP 自带的 `warmup()`（SF1 的 22 条查询全部跑一遍），再运行这条查询 |
+| `first run` | First execution of the query in a fresh process |
+| `repeat in same process` | Execute the query again immediately in the same process |
+| `after warmup` | Start another fresh process, run TQP's built-in `warmup()` (all 22 SF1 queries once), then execute the query |
 
-- 整个实验完整重复 2 次（`repeat` = 1、2），一共 16 个进程，得到 24 行数据。
-- 显存的记录方式和 2026-10-12 那次相同：在 `free_all()` 之前读数，然后清零。时间用 TQP 自己的计时，不含读盘和输出。
+- Repeat the entire experiment 2 times (`repeat` = 1, 2), using 16 processes and producing 24 rows.
+- GPU memory is recorded as in the 2026-10-12 experiment: read counters before `free_all()`, then reset them. Timing uses TQP's own timer, excluding disk reads and output.
 
-## 文件
-| 文件 | 内容 |
+## Files
+| File | Contents |
 | --- | --- |
-| `stdout.log` | 16 个进程的完整输出 |
-| `warmup.csv` | 原始数据，从 `stdout.log` 里提取，单位是字节和秒 |
-| `warmup_derived.csv` | 全部原始列，加上派生列 |
-| `figures/` | 3 张图，PNG 和 SVG 各一份 |
+| `stdout.log` | Complete output from 16 processes |
+| `warmup.csv` | Raw data extracted from `stdout.log`, in bytes and seconds |
+| `warmup_derived.csv` | All raw columns plus derived columns |
+| `figures/` | 3 figures, each in PNG and SVG |
 
-代码在仓库的 `experiments/profiling/`：测量用 `measure_warmup.py`，分析和画图用 `analyze_warmup.py`。
+The code is in `experiments/profiling/` in the repository: `measure_warmup.py` for measurement and `analyze_warmup.py` for analysis and plotting.
 
-### 派生列定义
-| 派生列 | 放在哪一列后面 | 公式 | 含义 |
+### Derived Column Definitions
+| Derived column | Inserted after | Formula | Meaning |
 | --- | --- | --- | --- |
-| `label` | `run` | 由 condition 和 run 组合得到 | 这一行属于三种条件中的哪一种 |
-| `memory_identical_to_first_run` | `reserved_peak_bytes` | 5 个显存列是否都和同一查询、同一 repeat 的 first run 相等 | True 表示逐字节相同 |
-| `device_used_diff_bytes` | `device_used_bytes` | 本行的设备已用量 − first run 的设备已用量 | 整张卡多用了多少显存，包括 PyTorch 之外的部分 |
-| `time_speedup_vs_first_run` | `time_s`（最后一列） | first run 的时间 ÷ 本行的时间 | 比第一次运行快了多少倍 |
+| `label` | `run` | Combination of condition and run | Which of the three conditions this row represents |
+| `memory_identical_to_first_run` | `reserved_peak_bytes` | Whether all 5 GPU memory columns equal the first run for the same query and repeat | True means identical byte for byte |
+| `device_used_diff_bytes` | `device_used_bytes` | $\text{device usage in this row} - \text{device usage in first run}$ | Additional memory used on the entire card, including usage outside PyTorch |
+| `time_speedup_vs_first_run` | `time_s` (last column) | $\text{first-run time} / \text{time in this row}$ | Speedup relative to the first run |
 
-## 结果
-| 指标 | 结果 |
+## Results
+| Metric | Result |
 | --- | --- |
-| 5 个显存列（池高水位、真实数据、借用次数、临时峰值、reserved 峰值） | **24 行全部和对应的 first run 逐字节相同**；两次 repeat 之间也完全相同 |
-| 设备已用量 | `repeat in same process`：+0 字节；`after warmup`：每条查询都正好多 **35,651,584 字节（34 MiB）** |
-| 时间 | first run 是 255–316 ms；其余两种条件是 12–35 ms，快了 **7.5–22.5 倍** |
-| 和 2026-10-12 的同进程实验对比 | 4 条查询的 5 个显存列，和那次 `per_query.csv` 完全一样 |
+| 5 GPU memory columns (pool high-water mark, actual data, allocation count, transient peak, reserved peak) | **All 24 rows match the corresponding first run byte for byte**; both repeats are also identical |
+| Device memory used | `repeat in same process`: +0 bytes; `after warmup`: exactly **35,651,584 bytes (34 MiB)** more for every query |
+| Time | First run: 255–316 ms; the other two conditions: 12–35 ms, **7.5–22.5 times faster** |
+| Comparison with the 2026-10-12 experiment in a single process | All 5 GPU memory columns for the 4 queries exactly match that experiment's `per_query.csv` |
 
-## 图表
-**图 1 Transient peak**（`figures/1_transient_peak.png`）
-- 怎么读：每条查询有三根柱子，分别是三种条件下的池外临时峰值。
-- 看到什么：每组三根柱子一样高（逐字节相等），warmup 不改变临时峰值。
+## Figures
+**Figure 1. Transient peak** (`figures/1_transient_peak.png`)
+- How to read: each query has three bars showing the transient peak outside the pool under the three conditions.
+- What it shows: all three bars in each group have the same height (identical byte for byte); warmup does not change the transient peak.
 
-**图 2 Pool high-water mark**（`figures/2_pool_peak.png`）
-- 怎么读：同上，只是指标换成池高水位。
-- 看到什么：三根柱子一样高，warmup 也不改变池高水位。
+**Figure 2. Pool high-water mark** (`figures/2_pool_peak.png`)
+- How to read: same as above, using pool high-water mark instead.
+- What it shows: all three bars have the same height; warmup does not change the pool high-water mark either.
 
-**图 3 Query time**（`figures/3_time.png`）
-- 怎么读：同样的三种条件，指标换成查询时间。
-- 看到什么：只有 first run 很高，其余两种条件都低得多。warmup 改变的是时间。
+**Figure 3. Query time** (`figures/3_time.png`)
+- How to read: the same three conditions, using query time instead.
+- What it shows: only the first run is high; the other two conditions are much lower. Warmup affects timing.
 
-## 观察（已测到的）
-1. **查询级显存测量不需要 warmup。** 第一次运行、同进程内重复运行、warmup 之后运行，5 个显存指标都逐字节相同，两次完整重复也相同。
-2. **warmup 只给整张卡多加了一个固定的 34 MiB。** 这部分在 PyTorch 统计之外（allocated 和 reserved 都没变），每条查询都一样大，和查询本身无关。
-3. **时间需要 warmup。** 第一次运行慢 7.5–22.5 倍，所以测性能时必须先 warmup，或者丢掉第一次的结果。
-4. **10-12 那次同进程实验的数据可信。** 这 4 条查询在独立进程里测得的数字和那次完全一样，说明同一个进程里前面的查询没有给它们留下影响。
+## Observations (Measured)
+1. **Query-level GPU memory measurements do not require warmup.** All 5 GPU memory metrics are identical byte for byte for the first run, a repeat in the same process, and a run after warmup, including across both full repeats.
+2. **Warmup adds only a fixed 34 MiB to total device usage.** This is outside PyTorch's statistics (allocated and reserved are unchanged), identical for every query, and independent of the query itself.
+3. **Timing requires warmup.** The first run is 7.5–22.5 times slower, so performance measurements must warm up first or discard the first result.
+4. **The 10-12 experiment in a single process is reliable.** Measurements for these 4 queries in separate processes exactly match that experiment, indicating that preceding queries in the same process had no residual effect on them.
 
-## 推测（还没验证）
-- 那多出来的 34 MiB 很可能是 warmup 运行其他查询时，CUDA 加载了更多 kernel（GPU 程序），扩大了 CUDA context。依据是：它不在 PyTorch 的统计里，而且大小固定。
-- 第一次运行慢的原因可能包括：kernel 首次加载、`torch.jit.load` 或计划解析的首次开销、缓存分配器首次向显卡申请显存。本实验没有区分这几项。
+## Hypotheses (Unverified)
+- The extra 34 MiB likely comes from CUDA loading additional kernels (GPU programs) while warmup runs other queries, expanding the CUDA context. The evidence is its fixed size and absence from PyTorch's statistics.
+- Possible causes of the slower first run include initial kernel loading, initial overhead from `torch.jit.load` or plan parsing, and the caching allocator's first device-memory requests. This experiment does not distinguish these factors.
 
-## 结论与规则
-- **测显存：** 用 `--warmup_iter 0`，一条查询一个新进程。这样既得到正确的数字，又避免 warmup 带来的历史影响。在 16 GB 的显存预算里，把 CUDA context 等固定开销单独记一项。
-- **测时间：** 关闭测量工具，先 warmup，或者丢掉第一次运行；每个配置重复 3–5 次，报告中位数。
+## Conclusions and Rules
+- **GPU memory measurements:** use `--warmup_iter 0` and a fresh process per query. This produces correct measurements while avoiding history effects from warmup. Account for fixed overhead such as the CUDA context separately within the 16 GB memory budget.
+- **Timing measurements:** disable measurement tools, warm up first or discard the first run; repeat each configuration 3–5 times and report the median.
 
-## 延伸：下一步问题与实验
-| 结论 / 推测 | 新问题 | 对应实验 | 在 schedule 中的位置 |
+## Follow-up: Questions and Experiments
+| Conclusion / hypothesis | New question | Corresponding experiment | Position in schedule |
 | --- | --- | --- | --- |
-| 测显存不需要 warmup | 正式的查询级工具可以直接按"一条查询一个进程、不做 warmup"来设计 | 查询级测量工具和批量运行脚本 | B1 |
-| CUDA context 等固定开销是 OOM 预算的一部分 | 16 GB 的卡上，固定开销一共多大（context、kernel、库的工作空间）？SF 变大时会变吗？ | 规模扩展实验里，记录查询开始前的设备已用量 | B2 / E3 |
-| 第一次运行慢 7.5–22.5 倍 | 慢在哪里？会不会影响性能对比的结论？ | 做 E 阶段性能评估时，用 PyTorch profiler 拆开第一次运行的时间 | E1（可选） |
+| GPU memory measurements do not require warmup | The formal query-level tool can use "one process per query, no warmup" directly | Query-level measurement tool and batch runner | B1 |
+| Fixed overhead such as the CUDA context is part of the OOM budget | What is the total fixed overhead on a 16 GB card (context, kernels, library workspaces)? Does it change with larger SF? | Record device memory usage before query execution in scaling experiments | B2 / E3 |
+| The first run is 7.5–22.5 times slower | Where is the extra time spent? Could it affect performance comparisons? | Break down first-run time with the PyTorch profiler during phase E performance evaluation | E1 (optional) |
 
-## 局限
-- 只测了 4 条查询、SF1、4 GB 池。显存逐字节相同的结论，原理上和规模无关，但更大的 SF 还没有测过。
-- 只测了查询级。阶段级测量需要更多同步，等工具写好后，再确认一次 warmup 对它也没有影响。
-- 时间只是作为对照，每种条件只测了 2 次，不能当作性能结果。
+## Limitations
+- Only 4 queries at SF1 with a 4 GB pool were measured. Byte-for-byte memory equality should in principle be independent of scale, but larger SF values have not been tested.
+- Only query-level measurements were tested. Stage-level measurements require more synchronization; confirm that warmup has no effect once the tool is ready.
+- Timing serves only as a control, with 2 measurements per condition; it is not a performance result.

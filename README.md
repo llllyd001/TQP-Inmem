@@ -7,10 +7,12 @@ The structure of the repo is approximately:
 ```
 TQP-Inmem
     ├── IO               : In-memory pipeline and pure-Python pinned/GPU memory pools (block-based allocator on top of torch.empty)
+    ├── experiments      : Memory measurements; experiments/profiling has one folder per experiment (scripts, raw CSVs, figures, README)
     ├── operators        : Database operators (Join, Filter, Aggregation, Project, ...) implemented using PyTorch
     ├── queries          : Query files and parsed intermediate forms (from Spark query plan)
+    ├── report           : Memory-optimization report (main.tex, main.pdf) and reproduction commands (README.md)
     ├── tests            : Tests for the system
-    ├── utility          : Common helpers (logger, tensor utilities)
+    ├── utility          : Common helpers (logger, tensor utilities, plan-based column lifetimes in lifetime.py)
     ├── config.json      : Points to the TPC-H tensor data directory
     ├── constants.py     : System-wide constants
     ├── conversion.py    : Type conversion helpers (dates, floats, strings)
@@ -26,6 +28,23 @@ TQP-Inmem
 See [`Setup.md`](./Setup.md) for the conda environment, TPC-H data generation, and Python dependency steps.
 
 Possible follow-up work are tracked in [`Tasks.md`](./Tasks.md).
+
+## Memory Optimization (this branch)
+
+This branch adds operator- and query-agnostic GPU memory management, all behind switches that are off by default; with every switch off the system behaves exactly as before.
+
+| Switch | Effect |
+| :--- | :--- |
+| `--gpu_pool_gb G` | Size of the GPU slab pool (default 4 GB) |
+| `--free_dead` | Return slab memory of columns after their last use in the plan |
+| `--slab_eps 0.01` | Plan the slab block size before execution from a 1% waste budget |
+| `--coalesce_every` | Merge adjacent free slab blocks on every free |
+| `PYTORCH_ALLOC_CONF=expandable_segments:True` | PyTorch expandable segments (older PyTorch: `PYTORCH_CUDA_ALLOC_CONF`) |
+| `--mem_profile <csv>`, `--mem_trace <dir>` | Per-query and per-operator memory measurement |
+
+Example: `python3 main.py --SF 10 --q 9 --gpu_pool_gb 6 --free_dead --slab_eps 0.01 --coalesce_every --no_debug`
+
+The report is [`report/main.pdf`](./report/main.pdf); [`report/README.md`](./report/README.md) lists the exact commands behind every table and figure.
 
 ## Running the System
 

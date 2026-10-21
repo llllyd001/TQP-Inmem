@@ -1,35 +1,35 @@
-# 2026-10-21 最大可运行 SF：baseline 与组合配置
+# 2026-10-21 Maximum Runnable SF: Baseline vs. Combined Configuration
 
-## 目的
-测量每条查询在 16 GB 卡上能跑通的最大 SF，比较未修改系统（baseline）与组合配置（S3 + S2 + S4 + P1）。
+## Objective
+Measure the maximum SF each query can run on a 16 GB card, comparing the unmodified system (baseline) with the combined configuration (S3 + S2 + S4 + P1).
 
-## 方法
-- 复用 `experiments/profiling/mem_sweep.py` 的自适应池搜索（与 E3 相同）：一条查询在某个 SF 下，只要存在一个 slab 大小能让它跑通就算"能跑"；SF 从小到大，一条查询失败后不再测更大的 SF。
-- baseline：不加参数。组合：`--main_args "--free_dead --slab_eps 0.01 --coalesce_every" --alloc_conf expandable_segments:True`。
-- SF 10、15、20（SF20 数据 18.4 GB，是磁盘限额允许的最大值）；之后对 Q9、Q21 在 SF 11–14 加测（`fine-*.csv`）。
-- `--quiet_gpu`：每次启动前要求整卡已用显存 ≤ 0.5 GB，避免别人的任务造成假的 OOM。
-- 服务器日志：`~/runs/tqp/20261021-013929-maxsf-baseline/`、`~/runs/tqp/*-maxsf-combined/`。
+## Method
+- Reuse the adaptive pool search in `experiments/profiling/mem_sweep.py` (as in E3): a query is considered runnable at an SF if any slab size allows it to complete; test SF in ascending order and stop testing larger SF values after a query fails.
+- Baseline: no additional arguments. Combined: `--main_args "--free_dead --slab_eps 0.01 --coalesce_every" --alloc_conf expandable_segments:True`.
+- SF 10, 15, 20 (SF20 data is 18.4 GB, the largest allowed by the disk quota); then test Q9 and Q21 additionally at SF 11–14 (`fine-*.csv`).
+- `--quiet_gpu`: require total device memory usage $\le 0.5\,\mathrm{GB}$ before each run to avoid false OOMs caused by other users' jobs
+- Server logs: `~/runs/tqp/20261021-013929-maxsf-baseline/`, `~/runs/tqp/*-maxsf-combined/`.
 
-## 文件
-| 文件 | 内容 |
+## Files
+| File | Contents |
 |---|---|
-| `baseline.csv`、`combined.csv` | 每次尝试一行（列同 `mem_profiler.py` 的 `_COLUMNS`），SF 10/15/20 |
-| `fine-baseline.csv`、`fine-combined.csv` | Q9、Q21 在 SF 11–14 的尝试 |
+| `baseline.csv`, `combined.csv` | One row per attempt (same columns as `mem_profiler.py`'s `_COLUMNS`), SF 10/15/20 |
+| `fine-baseline.csv`, `fine-combined.csv` | Q9 and Q21 attempts at SF 11–14 |
 
-## 主要结果（SF 10/15/20）
-| 查询 | baseline | 组合 |
+## Main Results (SF 10/15/20)
+| Query | baseline | Combined |
 |---|---|---|
-| Q21 | SF10 也 OOM | SF10（SF15 OOM） |
-| Q9 | SF10（SF15 OOM） | SF10（SF15 OOM） |
-| Q7 | SF15（SF20 池超过 14 GB 上限） | ≥ SF20 |
-| 其余 19 条 | ≥ SF20 | ≥ SF20 |
+| Q21 | OOM even at SF10 | SF10 (SF15 OOM) |
+| Q9 | SF10 (SF15 OOM) | SF10 (SF15 OOM) |
+| Q7 | SF15 (pool exceeds the 14 GB limit at SF20) | ≥ SF20 |
+| Other 19 queries | ≥ SF20 | ≥ SF20 |
 
-加测 SF 11–14（Q9、Q21）后：
+After additional tests at SF 11–14 (Q9, Q21):
 
-| 查询 | baseline | 组合 |
+| Query | baseline | Combined |
 |---|---|---|
-| Q21 | SF10 OOM（E3 中 SF7 能跑） | **SF11**（SF12 OOM） |
-| Q9 | **SF10**（SF11 OOM） | **SF12**（SF13 OOM） |
+| Q21 | SF10 OOM (SF7 succeeded in E3) | **SF11** (SF12 OOM) |
+| Q9 | **SF10** (SF11 OOM) | **SF12** (SF13 OOM) |
 | Q7 | SF15 | ≥ SF20 |
 
-组合配置下全部 22 条查询都能跑到 SF11；baseline 在 SF10 时 Q21 已 OOM。服务器日志另见 `~/runs/tqp/20261021-023727-maxsf-fine-combined/`、`~/runs/tqp/20261021-024137-maxsf-fine-baseline/`。
+With the combined configuration, all 22 queries run at SF11; baseline already encounters OOM for Q21 at SF10. Additional server logs: `~/runs/tqp/20261021-023727-maxsf-fine-combined/`, `~/runs/tqp/20261021-024137-maxsf-fine-baseline/`.
