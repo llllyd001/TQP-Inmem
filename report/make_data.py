@@ -181,7 +181,9 @@ def main():
     # Maximum SF uses any successful attempt; later failures do not erase successes.
     maxsf = {}
     for config in ('baseline', 'combined'):
-        rows = read_csv(PROFILING / f'2026-10-21-maxsf/{config}.csv', f'maxsf.{config}')
+        # SF 10/15/20 for all queries, plus SF 11-14 for the queries that failed between 10 and 15.
+        rows = [r for name in (config, f'fine-{config}')
+                for r in read_csv(PROFILING / f'2026-10-21-maxsf/{name}.csv', f'maxsf.{name}')]
         if rows:
             maxsf[config] = {}
             for r in rows:
@@ -215,7 +217,7 @@ def main():
               ([c, math.exp(statistics.mean(math.log(v) for v in ratios[c])), max(ratios[c])]
                for c in configs if ratios[c]), counts)
 
-    log = CONFIG_DIR / 'stdout.log'
+    log = CONFIG_DIR / 'runs.txt'
     if available(log, 'correctness'):
         results = defaultdict(lambda: [0, 0, 0, 0])
         pattern = r'SF=\S+ Q=\d+ config=(\S+) -> (\S+) \([^)]*s\), results=(\S+)'
