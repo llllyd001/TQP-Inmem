@@ -187,6 +187,7 @@ the plan, the operators, or the data representation. This covers S3, S2, S4, P1 
 static split; S1 and P2 require changing what is computed. For each cause I give
 candidate methods and their trade-offs; \cref{sec:impl} describes the ones I built.
 
+\subsection{Slab}
 \textbf{S3: last-use reclamation.} Freeing needs two answers: \emph{will anyone read
 this column later?} and \emph{does anyone still hold this memory now?} Neither alone
 saves slab memory. Removing a name from \code{tensor\_group} is always safe (a too-early
@@ -226,6 +227,7 @@ fraction $\varepsilon$, I choose the largest $b$ with $N\cdot b \le \varepsilon 
 the query runs. The only parameter, $\varepsilon$, has a direct meaning. A fixed tiny
 granularity removes the parameter but decouples the block from any transfer unit.
 
+\subsection{PyTorch Reserved Memory}
 \textbf{P1: PyTorch segments.} PyTorch's allocator already merges a freed block with its free
 neighbours immediately and places requests best-fit, so the S4 knobs bring nothing there.
 What remains is fragmentation across \emph{segments}: each segment is a separate driver
@@ -265,6 +267,12 @@ Slab policies are evaluated by replaying the trace in a pure-Python copy of the 
 placement changes neither which allocations happen nor which data is read, so the replay
 is exact; it reproduces all 65 measured high-water marks of the S3 runs.
 
+\textbf{Correctness.} With all switches on, plus \code{-{}-poison\_freed} and
+\code{-{}-check\_refs}, all 22 queries match the SF~1 reference shipped with the repository
+under its test rule (10 significant digits); bit-exact comparison is not meaningful because
+GPU floating-point sums are not ordered.
+
+\subsection{Slab}
 \textbf{S3.} Before a plan runs, \code{last\_uses} maps every column to the last operator
 whose Spark \code{Input} list (or, for the output operator, \code{Output} list) contains it.
 After operator $j$ (\cref{fig:reclaim}), \code{free\_dead} deletes every column whose last
@@ -311,18 +319,15 @@ first operator that outputs it and dies after its last use (at the plan's end wi
 always for masks). The pool, still empty at that point, is reset to blocks of
 $\lfloor \varepsilon P / N \rfloor$\,MB (at least 1\,MB).
 
+\subsection{PyTorch Reserved Memory}
 \textbf{P1.} Expandable segments are enabled with the environment variable
 \code{PYTORCH\_ALLOC\_CONF=expandable\_segments:True}; no code changes.
 \code{-{}-empty\_cache\_per\_op}, a control for P1, calls \code{torch.cuda.empty\_cache()} after each operator.
 
-\textbf{Correctness.} With all switches on, plus \code{-{}-poison\_freed} and
-\code{-{}-check\_refs}, all 22 queries match the SF~1 reference shipped with the repository
-under its test rule (10 significant digits); bit-exact comparison is not meaningful because
-GPU floating-point sums are not ordered.
-
 % ---------------------------------------------------------------
 \section{Experiments}
 \label{sec:exp}
+\subsection{Setup and Measurement}
 \textbf{Setup.} One RTX~5080 (16.6\,GB usable as reported by PyTorch), PyTorch~2.14 with
 CUDA~13.0, TPC-H data at SF~5, 7 and 10, all 22 queries. Each query runs in a fresh
 process. I report the \emph{device need} of a run: the slab high-water mark (including
@@ -354,15 +359,6 @@ to the slab memory held at the failure plus 10\%, since an oversized slab takes 
 PyTorch; once both kinds of failure are seen, it bisects between them. A query is OOM at an
 SF when the interval closes to 0.2\,GB without a successful run (cap 14\,GB). Each query
 gets its own $P$, and both systems use the same search.
-
-\textbf{Correctness.} Each optimized run is compared with a reference run of the
-unmodified system on the same data. Of 520 comparisons at SF~5--10, two differ, and
-both trace back to the unmodified system: its hash aggregation draws random hash
-coefficients per run and separates groups only by hash value
-(\code{operators/aggregate.py}), so two groups occasionally merge and a count grows
-(e.g.\ 64 to 72 in Q16). In the Q16 case the \emph{reference} run was the outlier: five fresh
-unmodified runs and all seven optimized configurations agree with each other; in the other
-case five repeats of the same configuration match the reference.
 
 \textbf{OOM at SF 10.} \Cref{fig:ranking} ranks the queries by device need. Q21 does not
 run at any slab size, and Q9 needs 16.15\,GB of the 16.6\,GB device.
@@ -443,6 +439,16 @@ part is taken when the slab reaches its high-water mark (at the end of the query
 \caption{Device need per query at SF~10 (slab high-water + PyTorch reserved + context).}
 \label{fig:need}
 \end{figure*}
+
+\subsection{Effect of Each Method}
+\textbf{Correctness.} Each optimized run is compared with a reference run of the
+unmodified system on the same data. Of 520 comparisons at SF~5--10, two differ, and
+both trace back to the unmodified system: its hash aggregation draws random hash
+coefficients per run and separates groups only by hash value
+(\code{operators/aggregate.py}), so two groups occasionally merge and a count grows
+(e.g.\ 64 to 72 in Q16). In the Q16 case the \emph{reference} run was the outlier: five fresh
+unmodified runs and all seven optimized configurations agree with each other; in the other
+case five repeats of the same configuration match the reference.
 
 \textbf{Slab: S3, S2 and S4.} \Cref{tab:slab} compares the slab
 high-water mark (including holes). Reclamation (S3) removes 33--40\% of the slab peak;
