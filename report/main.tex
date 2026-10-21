@@ -5,6 +5,8 @@
 \usepackage{microtype}
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage[justification=raggedright,singlelinecheck=false,skip=3pt]{caption}
+\newsavebox{\fitbox}
 \usepackage{multirow}
 \usepackage{xcolor}
 \usepackage{enumitem}
@@ -95,6 +97,7 @@ cannot obtain device memory (\code{torch.OutOfMemoryError}).
 
 \begin{figure}[t]
 \centering
+\begin{lrbox}{\fitbox}%
 \begin{tikzpicture}[x=0.82cm,y=0.55cm,font=\scriptsize]
   % device bar
   \draw[fill=gray!25] (0,0) rectangle (0.5,1) node[midway,rotate=90]{ctx};
@@ -117,6 +120,8 @@ cannot obtain device memory (\code{torch.OutOfMemoryError}).
   \node[anchor=west] at (0,-1.3) {\tikz\fill[red!45] (0,0) rectangle (0.25,0.18); operator temporaries in use};
   \node[anchor=west] at (4.6,-1.3) {\tikz\fill[red!20] (0,0) rectangle (0.25,0.18); cached, unused};
 \end{tikzpicture}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{GPU memory during one TQP-Inmem query. The slab holds all scanned columns and
 operator outputs until the query ends; operator temporaries live in PyTorch's cache.}
 \label{fig:layout}
@@ -131,6 +136,7 @@ are released, so data and lifetimes must be settled before layout is evaluated.
 
 \begin{table}[t]
 \centering\small
+\begin{lrbox}{\fitbox}%
 \setlength{\tabcolsep}{3pt}
 \begin{tabular}{@{}llp{5.1cm}@{}}
 \toprule
@@ -147,6 +153,8 @@ Lifetime & S3 & The slab keeps columns no later operator reads (dead data) \\
  & -- & Static split between slab and PyTorch \\
 \bottomrule
 \end{tabular}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{Possible causes of out-of-memory failures.}
 \label{tab:causes}
 \end{table}
@@ -270,6 +278,7 @@ if one points into a returned block.
 
 \begin{figure}[t]
 \centering
+\begin{lrbox}{\fitbox}%
 \begin{tikzpicture}[font=\scriptsize,node distance=2.5mm,
   box/.style={draw,rounded corners=1.5pt,align=center,inner sep=2.5pt,fill=#1},box/.default=white]
   \node[box=gray!12] (plan) {plan: last reader\\of each column};
@@ -285,6 +294,8 @@ if one points into a returned block.
   \draw[-{Latex[length=1.5mm]}] (free)--(next);
   \draw[-{Latex[length=1.5mm]}] (next.north)--(run.south);
 \end{tikzpicture}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{Executor-level reclamation after each operator (S3).}
 \label{fig:reclaim}
 \end{figure}
@@ -358,6 +369,7 @@ run at any slab size, and Q9 needs 16.15\,GB of the 16.6\,GB device.
 
 \begin{figure}[t]
 \centering
+\begin{lrbox}{\fitbox}%
 \pgfplotstableread[col sep=comma]{plotdata/ranking_sf10.csv}\rank
 \begin{tikzpicture}
 \begin{axis}[qbar, width=\columnwidth, height=3.6cm, ymin=0, ymax=19.5,
@@ -372,6 +384,8 @@ run at any slab size, and Q9 needs 16.15\,GB of the 16.6\,GB device.
 \end{axis}
 \draw[dashed] (capL) -- (capR) node[pos=0.97,above left,font=\tiny,inner sep=1pt]{usable device memory};
 \end{tikzpicture}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{Device need per query at SF~10, highest first. Q21 fails at every slab size.}
 \label{fig:ranking}
 \end{figure}
@@ -384,6 +398,7 @@ memory (P1) is large only for a few queries (3.2\,GB for Q10).
 
 \begin{figure*}[t]
 \centering
+\begin{lrbox}{\fitbox}%
 \pgfplotstableread[col sep=comma]{plotdata/breakdown_sf10.csv}\brk
 \begin{tikzpicture}
 \begin{axis}[qbar, bar width=7pt, width=\textwidth, height=3.5cm, ymin=0, ymax=17,
@@ -399,6 +414,8 @@ memory (P1) is large only for a few queries (3.2\,GB for Q10).
 \node[font=\tiny,rotate=90,anchor=west] at (axis cs:0,0.3) {OOM};
 \end{axis}
 \end{tikzpicture}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{Composition of the device need at SF~10 without any optimization. The slab
 part is taken when the slab reaches its high-water mark (at the end of the query).}
 \label{fig:breakdown}
@@ -406,6 +423,7 @@ part is taken when the slab reaches its high-water mark (at the end of the query
 
 \begin{figure*}[t]
 \centering
+\begin{lrbox}{\fitbox}%
 \pgfplotstableread[col sep=comma]{plotdata/need_sf10.csv}\need
 \begin{tikzpicture}
 \begin{axis}[qgroup, bar width=1.8pt, width=\textwidth, height=3.2cm, ymin=0, ymax=19.5,
@@ -420,6 +438,8 @@ part is taken when the slab reaches its high-water mark (at the end of the query
 \end{axis}
 \draw[dashed] (nL) -- (nR) node[pos=0.98,above left,font=\tiny,inner sep=1pt]{usable device memory};
 \end{tikzpicture}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{Device need per query at SF~10 (slab high-water + PyTorch reserved + context).}
 \label{fig:need}
 \end{figure*}
@@ -440,6 +460,7 @@ help (3.4\%).
 
 \begin{table}[t]
 \centering\small
+\begin{lrbox}{\fitbox}%
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}lccccc@{}}
 \toprule
@@ -450,12 +471,15 @@ SF & unmod. & S3 & S3+S2 & S3+S4 & S3+S2+S4 \\
 10 & 71.5 & 48.1 & 42.0 & 44.4 & 40.7 \,($-$43\%) \\
 \bottomrule
 \end{tabular}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{Slab high-water mark summed over queries (GB; 22 queries at SF 5 and 7, 21 at SF 10).}
 \label{tab:slab}
 \end{table}
 
 \begin{figure}[t]
 \centering
+\begin{lrbox}{\fitbox}%
 \pgfplotstableread[col sep=comma]{plotdata/eps_sf10.csv}\eps
 \begin{tikzpicture}
 \begin{axis}[name=a, width=0.55\columnwidth, height=3.4cm, xtick={0,...,4},
@@ -473,6 +497,8 @@ SF & unmod. & S3 & S3+S2 & S3+S4 & S3+S2+S4 \\
 \addplot[cB,mark=square*,mark size=1.2pt] table[x expr=\coordindex,y=highwater_lazy]{\eps};
 \end{axis}
 \end{tikzpicture}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{S2 on top of S3 at SF~10 (exact replay of the measured S3 runs). Left: block
 padding at the high-water mark divided by the slab size, averaged over queries; the bound
 $N b \le \varepsilon P$ holds in every case. Right: slab high-water mark summed over queries.}
@@ -488,6 +514,7 @@ only segments that are entirely free. The total reserved outside the slab falls 
 
 \begin{figure}[t]
 \centering
+\begin{lrbox}{\fitbox}%
 \pgfplotstableread[col sep=comma]{plotdata/p1_sf10.csv}\pone
 \begin{tikzpicture}
 \begin{axis}[qgroup, bar width=1.6pt, width=\columnwidth, height=3.4cm, ymin=0, ymax=3.6,
@@ -498,6 +525,8 @@ only segments that are entirely free. The total reserved outside the slab falls 
 \legend{unmodified, expandable segments, empty cache per operator}
 \end{axis}
 \end{tikzpicture}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{PyTorch memory reserved but not in use at its peak, SF~10.}
 \label{fig:p1}
 \end{figure}
@@ -516,6 +545,7 @@ unmodified system already fails Q9 and Q21.
 
 \begin{table*}[t]
 \centering\small\setlength{\tabcolsep}{3.2pt}
+\begin{lrbox}{\fitbox}%
 \begin{tabular}{@{}l*{22}{c}@{}}
 \toprule
 Query & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 & 22 \\
@@ -524,6 +554,8 @@ unmodified   & -- & -- & -- & -- & -- & -- & -- & -- & 10 & -- & -- & -- & -- & 
 S3+S2+S4+P1  & -- & -- & -- & -- & -- & -- & -- & -- & 12 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 11 & -- \\
 \bottomrule
 \end{tabular}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{Largest SF at which each query runs on the 16\,GB GPU at some slab size. -- means no OOM
 up to SF~15, the largest SF tested.}
 \label{tab:maxsf}
@@ -555,6 +587,7 @@ query (Q3, +5\,ms).
 
 \begin{table}[t]
 \centering\small
+\begin{lrbox}{\fitbox}%
 \begin{tabular}{@{}lcc@{}}
 \toprule
 Configuration & geo.\ mean & max \\
@@ -566,6 +599,8 @@ S3 + S2 + S4 & 1.016 & 1.065 \\
 S3 + S2 + S4 + P1 & 1.029 & 1.157 \\
 \bottomrule
 \end{tabular}
+\end{lrbox}\usebox{\fitbox}
+\captionsetup{width=\wd\fitbox}
 \caption{Query time relative to the unmodified system at SF~10 (21 queries).}
 \label{tab:time}
 \end{table}
