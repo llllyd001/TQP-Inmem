@@ -476,12 +476,46 @@ changes. Summed over queries at SF~10 it falls from 129.9 to 106.5 (S3), 100.7 (
 \label{fig:need}
 \end{figure*}
 
-% TODO(claude): max SF table
+\textbf{Largest runnable SF.} A query runs at an SF if some slab size lets it finish
+(the adaptive search used for slab sizes in the setup); SF~10, 15 and 20 are tested for all
+queries and SF~11--14 for the two queries that fail in between. With all four changes, Q21
+runs at SF~11 instead of failing at SF~10, Q9 runs at SF~12 instead of 10, and Q7 at SF~20
+instead of 15 (\cref{tab:maxsf}); the other 19 queries run at SF~20 in both systems.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Query & unmodified & S3+S2+S4+P1 \\
+\midrule
+Q21 & fails at 10 & 11 \\
+Q9  & 10 & 12 \\
+Q7  & 15 & $\ge$20 \\
+other 19 & $\ge$20 & $\ge$20 \\
+\midrule
+all 22 queries & fails at 10 & 11 \\
+\bottomrule
+\end{tabular}
+\caption{Largest SF at which each query runs on the 16\,GB GPU.}
+\label{tab:maxsf}
+\end{table}
 
 \section{Results}
 \label{sec:results}
+\begin{itemize}
+\item \textbf{Slab.} Last-use reclamation, a block size planned from a 1\% waste budget, and
+  coalescing on every free lower the summed slab peak by 43--57\% at SF~5--10. Reclamation
+  alone gives 33--40\%; its measured peaks match the exact replay of the trace.
+\item \textbf{PyTorch.} Expandable segments reduce reserved-but-unused PyTorch memory by
+  75\% at SF~10 (7.7 to 1.9\,GB summed).
+\item \textbf{Device need.} Together, the device need summed over queries at SF~10 falls by
+  28\%; Q9 needs 13.3 instead of 16.2\,GB, and Q10 6.8 instead of 12.1\,GB.
+\item \textbf{Scale.} All 22 queries now run at SF~11 on the 16\,GB GPU, where Q21 previously
+  failed at SF~10; Q9 runs at SF~12 (was 10) and Q7 at SF~20 (was 15).
+\item \textbf{Cost.} Results match the reference, and queries are 2.9\% slower on geometric
+  mean (\cref{sec:tradeoffs}).
+\end{itemize}
 
-% ---------------------------------------------------------------
 \section{Trade-offs}
 \label{sec:tradeoffs}
 \textbf{Run time.} \Cref{tab:time} compares query time at SF~10 (median of three runs after
