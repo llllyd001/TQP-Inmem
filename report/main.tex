@@ -358,7 +358,32 @@ part is taken when the slab reaches its high-water mark (at the end of the query
 \label{fig:breakdown}
 \end{figure*}
 
-% TODO(claude): slab configs, eps, P1, P1+S3, max SF
+\begin{figure}[t]
+\centering
+\pgfplotstableread[col sep=comma]{plotdata/eps_sf10.csv}\eps
+\begin{tikzpicture}
+\begin{axis}[name=a, width=0.55\columnwidth, height=3.4cm, xtick={0,...,4},
+  xticklabels={40\,MB,10\%,5\%,2\%,1\%}, xlabel={block size rule}, ylabel={waste / slab (\%)},
+  ymin=0, ymax=11, legend columns=1, legend style={at={(0.98,0.98)},anchor=north east}]
+\addplot[cA,mark=*,mark size=1.2pt] table[x expr=\coordindex,y=internal_over_pool_every]{\eps};
+\addplot[cB,mark=square*,mark size=1.2pt] table[x expr=\coordindex,y=internal_over_pool_lazy]{\eps};
+\addplot[black,only marks,mark=-,mark size=3pt] coordinates {(1,10) (2,5) (3,2) (4,1)};
+\legend{merge every free, merge every 6th, bound $\varepsilon$}
+\end{axis}
+\begin{axis}[at={(a.east)}, anchor=west, xshift=1.1cm, width=0.55\columnwidth, height=3.4cm, xtick={0,...,4},
+  xticklabels={40\,MB,10\%,5\%,2\%,1\%}, xlabel={block size rule}, ylabel={slab high-water, sum (GB)},
+  ymin=38, ymax=50]
+\addplot[cA,mark=*,mark size=1.2pt] table[x expr=\coordindex,y=highwater_every]{\eps};
+\addplot[cB,mark=square*,mark size=1.2pt] table[x expr=\coordindex,y=highwater_lazy]{\eps};
+\end{axis}
+\end{tikzpicture}
+\caption{S2 on top of S3 at SF~10 (exact replay of the measured S3 runs). Left: block
+padding at the high-water mark divided by the slab size, averaged over queries; the bound
+$N b \le \varepsilon P$ holds in every case. Right: slab high-water mark summed over queries.}
+\label{fig:eps}
+\end{figure}
+
+% TODO(claude): slab configs, P1, P1+S3, max SF
 
 \section{Results}
 \label{sec:results}
