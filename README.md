@@ -69,7 +69,7 @@ When the sweep finishes, it prints the path of the summary (`runs/max_sf_<name>_
 | `peak_memory_gb` | Peak GPU memory at that SF: slab high-water mark + PyTorch memory reserved outside the slab (GB = 10^9 bytes; CUDA context not included) |
 | `stopped_by` | `OOM at SF n` if the next SF tested fails, `largest SF tested` if the query ran at every SF |
 
-`runs/max_sf_<name>.csv` keeps one row per attempt. The sweep uses the first GPU unless `CUDA_VISIBLE_DEVICES` names another one, and stops if another process is using it; `--quiet_gpu` waits instead until the GPU is idle. Generating SF n needs about 0.92·n GB of disk, and SF 1–15 takes a few hours.
+`runs/max_sf_<name>.csv` keeps one row per attempt. The sweep uses the first GPU unless `CUDA_VISIBLE_DEVICES` names another one, and stops if another process is using it; `--quiet_gpu` waits instead until the GPU is idle. Generating SF n needs about 0.92·n GB of disk; SF 1–15 takes about an hour per command on an RTX 5080.
 
 ## Running the System
 
