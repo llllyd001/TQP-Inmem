@@ -1,5 +1,5 @@
 \documentclass[10pt,twocolumn,letterpaper]{article}
-\usepackage[margin=0.75in,columnsep=0.25in]{geometry}
+\usepackage[margin=0.65in,columnsep=0.22in]{geometry}
 \usepackage{mathptmx}
 \usepackage[T1]{fontenc}
 \usepackage{microtype}
@@ -29,6 +29,7 @@
 \setlist{nosep,leftmargin=*}
 \setlength{\textfloatsep}{8pt plus 2pt}
 \setlength{\abovecaptionskip}{3pt}
+\renewcommand{\dbltopfraction}{0.85}\setcounter{dbltopnumber}{2}
 \newcommand{\code}[1]{\texttt{\small #1}}
 
 \title{\Large\bfseries Where Does the GPU Memory Go?\\ Operator-Agnostic Memory Management for TQP-Inmem}
@@ -241,7 +242,7 @@ Records stay in host lists and are written when the query ends, so tracing alloc
 GPU memory; with and without tracing, all query-level memory counters are identical.
 Slab policies are evaluated by replaying the trace in a pure-Python copy of the pool:
 placement changes neither which allocations happen nor which data is read, so the replay
-is exact.
+is exact; it reproduces all 65 measured high-water marks of the S3 runs.
 
 \textbf{S3.} Before a plan runs, \code{last\_uses} maps every column to the last operator
 whose Spark \code{Input} list (or, for the output operator, \code{Output} list) contains it.
@@ -279,20 +280,21 @@ if one points into a returned block.
 free instead of every sixth. Placement stays first-fit, which needs no threshold.
 
 \textbf{S2.} With \code{-{}-slab\_eps}~$\varepsilon$, after loading a query's plans and
-before it runs, \code{max\_live\_columns} computes $N$ by sweeping the plan: a column is
-born at the first operator that outputs it and dies after its last use (or at the plan's
-end without S3); masks live to the end. The pool, still empty at that point, is reset to
-blocks of $\lfloor \varepsilon P / N \rfloor$\,MB (at least 1\,MB).
+before it runs, \code{max\_live\_columns} computes $N$ from the plan as the maximum over
+operators of the columns still live when the operator starts plus the columns it outputs:
+every output gets a fresh allocation while the inputs are still held. A column is born at the
+first operator that outputs it and dies after its last use (at the plan's end without S3, and
+always for masks). The pool, still empty at that point, is reset to blocks of
+$\lfloor \varepsilon P / N \rfloor$\,MB (at least 1\,MB).
 
 \textbf{P1.} Expandable segments are enabled with the environment variable
 \code{PYTORCH\_ALLOC\_CONF=expandable\_segments:True}; no code changes.
 \code{-{}-empty\_cache\_per\_op} calls \code{torch.cuda.empty\_cache()} after each operator.
 
-\textbf{Correctness.} Results are compared with the SF~1 reference shipped with the
-repository using its test rule (10 significant digits). Bit-exact comparison is not
-meaningful: the unmodified system already varies in the 16th--17th digit between runs,
-because GPU floating-point sums are not ordered. With all switches on, plus
-\code{-{}-poison\_freed} and \code{-{}-check\_refs}, all 22 queries match the reference.
+\textbf{Correctness.} With all switches on, plus \code{-{}-poison\_freed} and
+\code{-{}-check\_refs}, all 22 queries match the SF~1 reference shipped with the repository
+under its test rule (10 significant digits); bit-exact comparison is not meaningful because
+GPU floating-point sums are not ordered.
 
 % ---------------------------------------------------------------
 \section{Experiments}
@@ -307,6 +309,15 @@ Memory is measured without warm-up (a warm-up changes no memory counter); time i
 after one warm-up run with tracing off. The GPU was shared with another user's jobs:
 each run starts only when free memory covers the query's measured need, and timing and
 OOM-boundary runs start only when the GPU is otherwise idle.
+
+\textbf{Correctness.} Each optimized run is compared with a reference run of the
+unmodified system on the same data. Of about 650 comparisons at SF~5--10, two differ, and
+both trace back to the unmodified system: its hash aggregation draws random hash
+coefficients per run and separates groups only by hash value
+(\code{operators/aggregate.py}), so two groups occasionally merge and a count grows
+(e.g.\ 64 to 72 in Q16). In the Q16 case the \emph{reference} run was the outlier: five fresh
+unmodified runs and all seven optimized configurations agree with each other; in the other
+case five repeats of the same configuration match the reference.
 
 \textbf{OOM at SF 10.} \Cref{fig:ranking} ranks the queries by device need. Q21 does not
 run at any slab size, and Q9 needs 16.15\,GB of the 16.6\,GB device.
@@ -332,16 +343,16 @@ run at any slab size, and Q9 needs 16.15\,GB of the 16.6\,GB device.
 \end{figure}
 
 \textbf{Where the memory goes.} \Cref{fig:breakdown} splits each query's need at SF~10.
-Dead data held by the slab is the largest single part for most queries; block padding
-(S2) is large for queries with many small allocations; PyTorch's temporaries dominate the
-two queries closest to the limit (Q9, Q21 at SF~7), and cached-but-unused PyTorch memory (P1)
-is small except for a few queries.
+Dead data held by the slab is the largest single part in 11 of the 21 queries, and PyTorch's
+temporaries in use in 8, including the two with the highest need (Q9, Q10). Block padding (S2)
+dominates where a query makes many small allocations (Q2), and cached-but-unused PyTorch
+memory (P1) is large only for a few queries (3.2\,GB for Q10).
 
 \begin{figure*}[t]
 \centering
 \pgfplotstableread[col sep=comma]{plotdata/breakdown_sf10.csv}\brk
 \begin{tikzpicture}
-\begin{axis}[qbar, bar width=7pt, width=\textwidth, height=4.2cm, ymin=0, ymax=17,
+\begin{axis}[qbar, bar width=7pt, width=\textwidth, height=3.5cm, ymin=0, ymax=17,
   xticklabels from table={\brk}{qid}, ylabel={GB}, xlabel={TPC-H query (SF 10), sorted by device need},
   legend columns=6]
 \addplot[fill=cCtx,draw=none] table[y=ctx]{\brk};
@@ -359,7 +370,27 @@ part is taken when the slab reaches its high-water mark (at the end of the query
 \label{fig:breakdown}
 \end{figure*}
 
-\textbf{Slab: S3, S2 and S4.} \Cref{fig:slab} and \cref{tab:slab} compare the slab
+\begin{figure*}[t]
+\centering
+\pgfplotstableread[col sep=comma]{plotdata/need_sf10.csv}\need
+\begin{tikzpicture}
+\begin{axis}[qgroup, bar width=1.8pt, width=\textwidth, height=3.2cm, ymin=0, ymax=19.5,
+  xticklabels from table={\need}{qid}, ylabel={device need (GB)}, xlabel={TPC-H query (SF 10)}, legend columns=4]
+\addplot[fill=cCtx,draw=none] table[y=baseline]{\need};
+\addplot[fill=cDead,draw=none] table[y=s3]{\need};
+\addplot[fill=cA,draw=none] table[y=s3_p1]{\need};
+\addplot[fill=cLive!60!black,draw=none] table[y=s3_s2_s4_p1]{\need};
+\legend{unmodified, S3, S3+P1, S3+S2+S4+P1}
+\coordinate (nL) at (axis cs:-0.6,16.61); \coordinate (nR) at (axis cs:21.6,16.61);
+\node[font=\tiny,rotate=90,anchor=west] at (axis cs:0,0.3) {OOM};
+\end{axis}
+\draw[dashed] (nL) -- (nR) node[pos=0.98,above left,font=\tiny,inner sep=1pt]{usable device memory};
+\end{tikzpicture}
+\caption{Device need per query at SF~10 (slab high-water + PyTorch reserved + context).}
+\label{fig:need}
+\end{figure*}
+
+\textbf{Slab: S3, S2 and S4.} \Cref{tab:slab} compares the slab
 high-water mark (including holes). Reclamation (S3) removes 33--40\% of the slab peak;
 the measured high-water marks match the exact replay. On top of S3, the waste-budget block
 size (S2, $\varepsilon=1\%$) removes most remaining padding and coalescing on every free (S4)
@@ -367,25 +398,6 @@ removes most holes; together the slab peak falls by 43--57\%. With S3, padding a
 small because most of them were attached to dead data. \Cref{fig:eps} shows the effect of
 $\varepsilon$: the measured padding stays below the budget for every query.
 
-\begin{figure*}[t]
-\centering
-\pgfplotstableread[col sep=comma]{plotdata/slab_sf10.csv}\slab
-\begin{tikzpicture}
-\begin{axis}[qgroup, bar width=1.4pt, width=\textwidth, height=3.8cm, ymin=0, ymax=7.5,
-  xticklabels from table={\slab}{qid}, ylabel={slab high-water (GB)}, xlabel={TPC-H query (SF 10), sorted by device need},
-  legend columns=5]
-\addplot[fill=cCtx,draw=none] table[y=baseline]{\slab};
-\addplot[fill=cDead,draw=none] table[y=s3]{\slab};
-\addplot[fill=cInt,draw=none] table[y=s3_s2]{\slab};
-\addplot[fill=cD,draw=none] table[y=s3_s4]{\slab};
-\addplot[fill=cLive,draw=none] table[y=s3_s2_s4]{\slab};
-\legend{unmodified, S3, S3+S2, S3+S4, S3+S2+S4}
-\node[font=\tiny,rotate=90,anchor=west] at (axis cs:0,0.2) {OOM};
-\end{axis}
-\end{tikzpicture}
-\caption{Slab high-water mark per query at SF~10 for each slab configuration ($\varepsilon=1\%$).}
-\label{fig:slab}
-\end{figure*}
 
 \begin{table}[t]
 \centering\small
@@ -456,25 +468,6 @@ because a segment grows in fixed steps.
 changes. Summed over queries at SF~10 it falls from 129.9 to 106.5 (S3), 100.7 (S3+P1) and
 93.3\,GB (all, $-$28\%); for Q9, the query closest to the limit, from 16.2 to 13.3\,GB, and for Q10 from 12.1 to 6.8\,GB.
 
-\begin{figure*}[t]
-\centering
-\pgfplotstableread[col sep=comma]{plotdata/need_sf10.csv}\need
-\begin{tikzpicture}
-\begin{axis}[qgroup, bar width=1.8pt, width=\textwidth, height=3.8cm, ymin=0, ymax=19.5,
-  xticklabels from table={\need}{qid}, ylabel={device need (GB)}, xlabel={TPC-H query (SF 10)}, legend columns=4]
-\addplot[fill=cCtx,draw=none] table[y=baseline]{\need};
-\addplot[fill=cDead,draw=none] table[y=s3]{\need};
-\addplot[fill=cA,draw=none] table[y=s3_p1]{\need};
-\addplot[fill=cLive!60!black,draw=none] table[y=s3_s2_s4_p1]{\need};
-\legend{unmodified, S3, S3+P1, S3+S2+S4+P1}
-\coordinate (nL) at (axis cs:-0.6,16.61); \coordinate (nR) at (axis cs:21.6,16.61);
-\node[font=\tiny,rotate=90,anchor=west] at (axis cs:0,0.3) {OOM};
-\end{axis}
-\draw[dashed] (nL) -- (nR) node[pos=0.98,above left,font=\tiny,inner sep=1pt]{usable device memory};
-\end{tikzpicture}
-\caption{Device need per query at SF~10 (slab high-water + PyTorch reserved + context).}
-\label{fig:need}
-\end{figure*}
 
 \textbf{Largest runnable SF.} A query runs at an SF if some slab size lets it finish
 (the adaptive search used for slab sizes in the setup); SF~10, 15 and 20 are tested for all
@@ -512,8 +505,8 @@ all 22 queries & fails at 10 & 11 \\
   28\%; Q9 needs 13.3 instead of 16.2\,GB, and Q10 6.8 instead of 12.1\,GB.
 \item \textbf{Scale.} All 22 queries now run at SF~11 on the 16\,GB GPU, where Q21 previously
   failed at SF~10; Q9 runs at SF~12 (was 10) and Q7 at SF~20 (was 15).
-\item \textbf{Cost.} Results match the reference, and queries are 2.9\% slower on geometric
-  mean (\cref{sec:tradeoffs}).
+\item \textbf{Cost.} Results match the unmodified system up to its own run-to-run variation,
+  and queries are 2.9\% slower on geometric mean (\cref{sec:tradeoffs}).
 \end{itemize}
 
 \section{Trade-offs}
@@ -566,13 +559,10 @@ with \code{tpch-dbgen-tensors} (\code{./dbgen -s <SF>}); each measurement script
 record memory; \code{-{}-poison\_freed} and \code{-{}-check\_refs} are safety tests. Example:
 \code{python main.py -{}-SF 10 -{}-q 9 -{}-gpu\_pool\_gb 6 -{}-free\_dead -{}-slab\_eps 0.01 -{}-coalesce\_every}.
 
-\textbf{Experiments.} Each folder in \code{experiments/profiling/} holds its measurement and
-analysis scripts, raw CSVs (\code{trace/}), derived CSVs, figures and a README:
-\code{2026-10-20-baseline-trace} (\cref{fig:breakdown}), \code{2026-10-20-s3-free-dead},
-\code{2026-10-20-s4-placement-replay}, \code{2026-10-21-s2-eps} (\cref{fig:eps}),
-\code{2026-10-21-configs}, \code{2026-10-21-timing} (\cref{tab:time}) and
-\code{2026-10-21-maxsf}. \code{report/make\_data.py} turns them into the plotted tables in
-\code{report/plotdata/}; \code{latexmk -pdf main.tex} in \code{report/} builds this report.
+\textbf{Experiments.} Each folder in \code{experiments/profiling/} holds the measurement
+and analysis scripts, raw CSVs (\code{trace/}), derived CSVs, figures and a README for one
+experiment; \code{report/make\_data.py} builds the plotted tables in \code{report/plotdata/}
+and \code{latexmk -pdf main.tex} builds this report.
 
 \small
 \bibliographystyle{plain}
