@@ -15,6 +15,7 @@
   every axis/.append style={font=\scriptsize, tick label style={font=\tiny}, label style={font=\scriptsize},
     legend style={font=\tiny, draw=none, fill=none, at={(0.5,1.02)}, anchor=south}, legend cell align=left,
     ymajorgrids, grid style={gray!25}, xtick pos=bottom, ytick pos=left},
+  qgroup/.style={ybar=0pt, unbounded coords=jump, table/x=x, xtick={0,...,21}, xmin=-0.7, xmax=21.7},
   qbar/.style={ybar stacked, unbounded coords=jump, bar width=4pt, table/x=x, xtick={0,...,21}, xmin=-0.7, xmax=21.7}}
 \definecolor{cLive}{HTML}{2a6fdb}\definecolor{cInt}{HTML}{e8702a}\definecolor{cDead}{HTML}{1aa37a}
 \definecolor{cTorch}{HTML}{d1495b}\definecolor{cCache}{HTML}{f2a7b5}\definecolor{cCtx}{HTML}{9a9a9a}
@@ -358,6 +359,50 @@ part is taken when the slab reaches its high-water mark (at the end of the query
 \label{fig:breakdown}
 \end{figure*}
 
+\textbf{Slab: S3, S2 and S4.} \Cref{fig:slab} and \cref{tab:slab} compare the slab
+high-water mark (including holes). Reclamation (S3) removes 33--40\% of the slab peak;
+the measured high-water marks match the exact replay. On top of S3, the waste-budget block
+size (S2, $\varepsilon=1\%$) removes most remaining padding and coalescing on every free (S4)
+removes most holes; together the slab peak falls by 43--57\%. With S3, padding and holes are
+small because most of them were attached to dead data. \Cref{fig:eps} shows the effect of
+$\varepsilon$: the measured padding stays below the budget for every query.
+
+\begin{figure*}[t]
+\centering
+\pgfplotstableread[col sep=comma]{plotdata/slab_sf10.csv}\slab
+\begin{tikzpicture}
+\begin{axis}[qgroup, bar width=1.4pt, width=\textwidth, height=3.8cm, ymin=0, ymax=7.5,
+  xticklabels from table={\slab}{qid}, ylabel={slab high-water (GB)}, xlabel={TPC-H query (SF 10), sorted by device need},
+  legend columns=5]
+\addplot[fill=cCtx,draw=none] table[y=baseline]{\slab};
+\addplot[fill=cDead,draw=none] table[y=s3]{\slab};
+\addplot[fill=cInt,draw=none] table[y=s3_s2]{\slab};
+\addplot[fill=cD,draw=none] table[y=s3_s4]{\slab};
+\addplot[fill=cLive,draw=none] table[y=s3_s2_s4]{\slab};
+\legend{unmodified, S3, S3+S2, S3+S4, S3+S2+S4}
+\node[font=\tiny,rotate=90,anchor=west] at (axis cs:0,0.2) {OOM};
+\end{axis}
+\end{tikzpicture}
+\caption{Slab high-water mark per query at SF~10 for each slab configuration ($\varepsilon=1\%$).}
+\label{fig:slab}
+\end{figure*}
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+SF & unmod. & S3 & S3+S2 & S3+S4 & S3+S2+S4 \\
+\midrule
+5  & 50.0 & 29.8 & 22.6 & 26.4 & 21.7 \,($-$57\%) \\
+7  & 65.6 & 41.8 & 31.6 & 37.7 & 30.4 \,($-$54\%) \\
+10 & 71.5 & 48.1 & 42.0 & 44.4 & 40.7 \,($-$43\%) \\
+\bottomrule
+\end{tabular}
+\caption{Slab high-water mark summed over queries (GB; 22 queries at SF 5 and 7, 21 at SF 10).}
+\label{tab:slab}
+\end{table}
+
 \begin{figure}[t]
 \centering
 \pgfplotstableread[col sep=comma]{plotdata/eps_sf10.csv}\eps
@@ -383,7 +428,55 @@ $N b \le \varepsilon P$ holds in every case. Right: slab high-water mark summed 
 \label{fig:eps}
 \end{figure}
 
-% TODO(claude): slab configs, P1, P1+S3, max SF
+
+\textbf{PyTorch side: P1.} Expandable segments cut the memory PyTorch holds but does not
+use, summed over the 21 queries at SF~10, from 7.7 to 1.9\,GB (\cref{fig:p1}); for Q10 it
+falls from 3.2 to 0.4\,GB. Emptying the cache after every operator gives 5.7\,GB: it releases
+only segments that are entirely free. The total reserved outside the slab falls from 52.1 to
+46.3\,GB. Expandable segments are not better for every query: Q1 holds 0.48\,GB more,
+because a segment grows in fixed steps.
+
+\begin{figure}[t]
+\centering
+\pgfplotstableread[col sep=comma]{plotdata/p1_sf10.csv}\pone
+\begin{tikzpicture}
+\begin{axis}[qgroup, bar width=1.6pt, width=\columnwidth, height=3.4cm, ymin=0, ymax=3.6,
+  xticklabels from table={\pone}{qid}, ylabel={GB}, xlabel={TPC-H query (SF 10)}, legend columns=3]
+\addplot[fill=cCtx,draw=none] table[y=baseline]{\pone};
+\addplot[fill=cA,draw=none] table[y=p1]{\pone};
+\addplot[fill=cB,draw=none] table[y=p1_empty]{\pone};
+\legend{unmodified, expandable segments, empty cache per operator}
+\end{axis}
+\end{tikzpicture}
+\caption{PyTorch memory reserved but not in use at its peak, SF~10.}
+\label{fig:p1}
+\end{figure}
+
+\textbf{Both sides together.} \Cref{fig:need} shows the device need with S3, S3+P1 and all four
+changes. Summed over queries at SF~10 it falls from 129.9 to 106.5 (S3), 100.7 (S3+P1) and
+93.3\,GB (all, $-$28\%); for Q9, the query closest to the limit, from 16.2 to 13.3\,GB, and for Q10 from 12.1 to 6.8\,GB.
+
+\begin{figure*}[t]
+\centering
+\pgfplotstableread[col sep=comma]{plotdata/need_sf10.csv}\need
+\begin{tikzpicture}
+\begin{axis}[qgroup, bar width=1.8pt, width=\textwidth, height=3.8cm, ymin=0, ymax=19.5,
+  xticklabels from table={\need}{qid}, ylabel={device need (GB)}, xlabel={TPC-H query (SF 10)}, legend columns=4]
+\addplot[fill=cCtx,draw=none] table[y=baseline]{\need};
+\addplot[fill=cDead,draw=none] table[y=s3]{\need};
+\addplot[fill=cA,draw=none] table[y=s3_p1]{\need};
+\addplot[fill=cLive!60!black,draw=none] table[y=s3_s2_s4_p1]{\need};
+\legend{unmodified, S3, S3+P1, S3+S2+S4+P1}
+\coordinate (nL) at (axis cs:-0.6,16.61); \coordinate (nR) at (axis cs:21.6,16.61);
+\node[font=\tiny,rotate=90,anchor=west] at (axis cs:0,0.3) {OOM};
+\end{axis}
+\draw[dashed] (nL) -- (nR) node[pos=0.98,above left,font=\tiny,inner sep=1pt]{usable device memory};
+\end{tikzpicture}
+\caption{Device need per query at SF~10 (slab high-water + PyTorch reserved + context).}
+\label{fig:need}
+\end{figure*}
+
+% TODO(claude): max SF table
 
 \section{Results}
 \label{sec:results}
