@@ -49,7 +49,10 @@ find that data no longer needed by any later operator is the largest part of the
 slab peak. We implement four memory-management changes that are independent of
 any query or operator: last-use reclamation driven by the query plan, coalescing
 on every free, a block size planned before execution from a waste budget, and
-PyTorch's expandable segments. Results stay identical to the reference.
+PyTorch's expandable segments. Together they lower the slab peak by 43--57\%,
+PyTorch's reserved-but-unused memory by 75\% and the device need at SF~10 by 28\%, so
+all 22 queries run at SF~11 where one failed at SF~10, at a 2.9\% run-time cost and with
+results matching the unmodified system.
 \end{abstract}
 
 % ---------------------------------------------------------------
@@ -60,12 +63,12 @@ and executes them on tensor runtimes such as PyTorch, which makes GPU query proc
 fast without writing custom kernels. TQP-Inmem, the in-memory variant studied here,
 keeps every column and intermediate result in GPU memory. Its speed therefore comes with
 a hard limit: the data size it can handle is bounded by device memory.
-On an RTX~5080 (16\,GB), Q21 fails at SF~10 and Q9 has only about 1\,GB of headroom left
-(\cref{fig:ranking}).
+On an RTX~5080 (16\,GB), Q21 fails at SF~10 and Q9 needs 16.2 of the 16.6\,GB the device
+offers (\cref{fig:ranking}).
 
 This report optimizes how TQP-Inmem \emph{plans and manages} GPU memory, from the
 system side, so that it can process queries on larger data. We keep the setting fixed:
-a single GPU, all data resident in device memory, results identical to the unmodified
+a single GPU, all data resident in device memory, results that match the unmodified
 system, and any slowdown reported. All methods are operator-agnostic and query-agnostic:
 they depend only on the query plan and the allocator, not on tuning against TPC-H.
 
@@ -311,7 +314,7 @@ each run starts only when free memory covers the query's measured need, and timi
 OOM-boundary runs start only when the GPU is otherwise idle.
 
 \textbf{Correctness.} Each optimized run is compared with a reference run of the
-unmodified system on the same data. Of about 650 comparisons at SF~5--10, two differ, and
+unmodified system on the same data. Of 520 comparisons at SF~5--10, two differ, and
 both trace back to the unmodified system: its hash aggregation draws random hash
 coefficients per run and separates groups only by hash value
 (\code{operators/aggregate.py}), so two groups occasionally merge and a count grows
@@ -392,11 +395,16 @@ part is taken when the slab reaches its high-water mark (at the end of the query
 
 \textbf{Slab: S3, S2 and S4.} \Cref{tab:slab} compares the slab
 high-water mark (including holes). Reclamation (S3) removes 33--40\% of the slab peak;
-the measured high-water marks match the exact replay. On top of S3, the waste-budget block
+replaying the trace with the recorded frees reproduces every measured high-water mark. On top of S3, the waste-budget block
 size (S2, $\varepsilon=1\%$) removes most remaining padding and coalescing on every free (S4)
 removes most holes; together the slab peak falls by 43--57\%. With S3, padding and holes are
 small because most of them were attached to dead data. \Cref{fig:eps} shows the effect of
-$\varepsilon$: the measured padding stays below the budget for every query.
+$\varepsilon$: the measured padding stays below the budget for every query. Placement
+matters little once reclamation is on: in an exact replay of the trace, the smallest slab
+that lets each query finish is, summed at SF~10, within 3\% of a lower bound (the most
+blocks ever held at once) for first-fit with the original merging, within 1.1\% with
+merging on every free, and within 0.3\% for lifetime-aware placement; best-fit does not
+help (3.4\%).
 
 
 \begin{table}[t]
@@ -445,8 +453,7 @@ $N b \le \varepsilon P$ holds in every case. Right: slab high-water mark summed 
 use, summed over the 21 queries at SF~10, from 7.7 to 1.9\,GB (\cref{fig:p1}); for Q10 it
 falls from 3.2 to 0.4\,GB. Emptying the cache after every operator gives 5.7\,GB: it releases
 only segments that are entirely free. The total reserved outside the slab falls from 52.1 to
-46.3\,GB. Expandable segments are not better for every query: Q1 holds 0.48\,GB more,
-because a segment grows in fixed steps.
+46.3\,GB. Expandable segments are not better for every query: Q1 holds 0.48\,GB more.
 
 \begin{figure}[t]
 \centering
@@ -498,7 +505,7 @@ all 22 queries & fails at 10 & 11 \\
 \begin{itemize}
 \item \textbf{Slab.} Last-use reclamation, a block size planned from a 1\% waste budget, and
   coalescing on every free lower the summed slab peak by 43--57\% at SF~5--10. Reclamation
-  alone gives 33--40\%; its measured peaks match the exact replay of the trace.
+  alone gives 33--40\%.
 \item \textbf{PyTorch.} Expandable segments reduce reserved-but-unused PyTorch memory by
   75\% at SF~10 (7.7 to 1.9\,GB summed).
 \item \textbf{Device need.} Together, the device need summed over queries at SF~10 falls by
