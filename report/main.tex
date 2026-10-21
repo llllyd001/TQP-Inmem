@@ -227,7 +227,7 @@ go to PyTorch.
 \section{Implementation}
 \label{sec:impl}
 All changes are command-line switches that are off by default; with every switch off
-the program behaves exactly as before. The memory changes add 83 lines
+the program behaves exactly as before. The changes add 78 lines
 (\code{utility/lifetime.py}) and about 60 lines in \code{main.py} and the slab pool.
 
 \textbf{Measurement.} \code{-{}-mem\_trace} records, per operator, every slab allocation
@@ -391,10 +391,61 @@ $N b \le \varepsilon P$ holds in every case. Right: slab high-water mark summed 
 % ---------------------------------------------------------------
 \section{Trade-offs}
 \label{sec:tradeoffs}
+\textbf{Run time.} \Cref{tab:time} compares query time at SF~10 (median of three runs after
+a warm-up, tracing off). Reclamation adds one pass over \code{tensor\_group} and the pool per
+operator; expandable segments add driver calls when a segment grows. The combined
+configuration is 2.9\% slower on geometric mean; the largest slowdown is 16\% on a 30\,ms
+query (Q3, +5\,ms).
 
-% ---------------------------------------------------------------
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Configuration & geo.\ mean & max \\
+\midrule
+S3 & 1.009 & 1.040 \\
+P1 & 1.012 & 1.055 \\
+S3 + P1 & 1.023 & 1.065 \\
+S3 + S2 + S4 & 1.016 & 1.065 \\
+S3 + S2 + S4 + P1 & 1.029 & 1.157 \\
+\bottomrule
+\end{tabular}
+\caption{Query time relative to the unmodified system at SF~10 (21 queries).}
+\label{tab:time}
+\end{table}
+
+\textbf{Waste budget versus block count.} A smaller $\varepsilon$ gives smaller blocks and a
+tighter bound on padding (\cref{fig:eps}); it does not increase the number of allocations or
+free-list entries, which depend only on the plan. The cost of a small block appears only
+if a later component needs large fixed units, e.g.\ for transfers between host and device.
+
+\textbf{Complexity and scope.} All four changes are plan- and allocator-level: about 140
+lines of Python, no compiled code, no change to any operator, and each is a switch. S3
+relies on one invariant (between operators, device data is reachable only through the
+column map), which \code{--check\_refs} verifies generically rather than per query. The
+remaining limit is outside the slab: for the queries closest to the device limit, operator
+temporaries dominate (\cref{fig:breakdown}), which memory management alone cannot remove.
+
 \section{Reproduction}
 \label{sec:repro}
+\textbf{Environment.} NVIDIA GeForce RTX~5080 (16\,GB), driver 590.48.01, Python 3.12.14,
+PyTorch 2.14.0+cu130 (CUDA 13.0). Set-up follows \code{Setup.md}; TPC-H tensors are generated
+with \code{tpch-dbgen-tensors} (\code{./dbgen -s <SF>}); each measurement script with
+\code{-{}-manage\_data} generates one SF, runs, and deletes it.
+
+\textbf{Switches} (all off by default): \code{-{}-free\_dead} (S3), \code{-{}-coalesce\_every}
+(S4), \code{-{}-slab\_eps 0.01} (S2), \code{PYTORCH\_ALLOC\_CONF=expandable\_segments:True}
+(P1), \code{-{}-empty\_cache\_per\_op}; \code{-{}-mem\_profile <csv>} and \code{-{}-mem\_trace <dir>}
+record memory; \code{-{}-poison\_freed} and \code{-{}-check\_refs} are safety tests. Example:
+\code{python main.py -{}-SF 10 -{}-q 9 -{}-gpu\_pool\_gb 6 -{}-free\_dead -{}-slab\_eps 0.01 -{}-coalesce\_every}.
+
+\textbf{Experiments.} Each folder in \code{experiments/profiling/} holds its measurement and
+analysis scripts, raw CSVs (\code{trace/}), derived CSVs, figures and a README:
+\code{2026-10-20-baseline-trace} (\cref{fig:breakdown}), \code{2026-10-20-s3-free-dead},
+\code{2026-10-20-s4-placement-replay}, \code{2026-10-21-s2-eps} (\cref{fig:eps}),
+\code{2026-10-21-configs}, \code{2026-10-21-timing} (\cref{tab:time}) and
+\code{2026-10-21-maxsf}. \code{report/make\_data.py} turns them into the plotted tables in
+\code{report/plotdata/}; \code{latexmk -pdf main.tex} in \code{report/} builds this report.
 
 \small
 \bibliographystyle{plain}
