@@ -57,18 +57,24 @@ def analyze(query, ops, allocs, reads, frees):
     k = max(range(len(ops)), key=lambda j: int(ops[j]['slab_extent_blocks_end']))
     highwater = int(ops[k]['slab_extent_blocks_end']) * block
     occupied = [allocations[a] for a in snapshots[k]]
-    live = sum(a['size'] for a in occupied if a['last'] > k)
-    dead = sum(a['size'] for a in occupied if a['last'] <= k)
+    # Inputs of op k are still live at its end; dead = no read at or after k, yet still held.
+    live = sum(a['size'] for a in occupied if a['last'] >= k)
+    dead = sum(a['size'] for a in occupied if a['last'] < k)
     capacity = sum(a['count'] for a in occupied) * block
     return dict(highwater_real_bytes=highwater, live_real=live, internal_real=capacity - live - dead,
-                kept_dead_real=dead, kept_mask_real=sum(a['size'] for a in occupied if a['last'] <= k and a['mask']),
+                kept_dead_real=dead, kept_mask_real=sum(a['size'] for a in occupied if a['last'] < k and a['mask']),
                 holes_real=highwater - capacity, concurrent_need_real=concurrent,
                 static_need_real_bytes=highwater + int(query['transient_peak_bytes']))
 
 
 def main():
-    traces = {name: read_rows(HERE / 'trace' / f'{name}.csv')
-              for name in ('queries', 'ops', 'allocs', 'reads', 'frees')}
+    # trace-rerun/ holds queries re-measured after a failure caused by another user's GPU job;
+    # its rows replace the failed run's rows for the same (sf, qid).
+    names = ('queries', 'ops', 'allocs', 'reads', 'frees')
+    rerun = {name: read_rows(HERE / 'trace-rerun' / f'{name}.csv') for name in names}
+    redone = {(r['sf'], r['qid']) for r in rerun['queries']}
+    traces = {name: [r for r in read_rows(HERE / 'trace' / f'{name}.csv') if (r['sf'], r['qid']) not in redone]
+              + rerun[name] for name in names}
     baseline = {(r['sf'], r['qid']): r for r in
                 read_rows(HERE.parent / '2026-10-20-baseline-trace/baseline_derived.csv')}
     grouped = {}

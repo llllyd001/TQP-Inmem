@@ -1,0 +1,2 @@
+sf,qid,gpu_pool_gb,block_mb,status,pool_peak_bytes,pool_requested_bytes,pool_allocs,transient_peak_bytes,reserved_peak_bytes,inactive_split_peak_bytes,alloc_retries,device_used_start_bytes,device_used_end_bytes,allocated_start_bytes,reserved_start_bytes,allocated_end_bytes,reserved_end_bytes,time_s,error
+7,21,5.56,40.0,ok,2200000000,94490639,45,7709978112,15726542848,3730369024,0,5862588416,16082010112,5560000000,5561647104,5560000000,15726542848,1.8590013608336449,
