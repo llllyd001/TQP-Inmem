@@ -27,6 +27,32 @@ def last_uses(ops, args):
     return last
 
 
+def max_live_columns(ops, args, free_dead=False):
+    last = last_uses(ops, args)
+    births = {}
+    for j, u in enumerate(ops):
+        op = args[u]
+        outputs = list(op.get('output ids', []))
+        if op['name'] != 'Scan':
+            outputs.extend(op.get('materialized out', []))
+            if 'out mask id' in op:
+                outputs.append(op['out mask id'])
+        for col in outputs:
+            births.setdefault(col, j)
+
+    # Count inputs and newly born outputs together, before end-of-operator frees.
+    changes = [0] * (len(ops) + 1)
+    for col, birth in births.items():
+        death = max(birth, last.get(col, birth)) if free_dead and col < MASK_COL_START else len(ops) - 1
+        changes[birth] += 1
+        changes[death + 1] -= 1
+    live = peak = 0
+    for change in changes:
+        live += change
+        peak = max(peak, live)
+    return peak
+
+
 def free_dead(tensor_group, pool, last, j, poison=False, check_refs=False):
     for col in list(tensor_group):
         if col < MASK_COL_START and last.get(col, -1) <= j:

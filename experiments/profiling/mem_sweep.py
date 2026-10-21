@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -61,14 +62,27 @@ def check_gpu_idle(gpu_uuid):
             raise SystemExit(f'Sweep stopped: GPU {gpu_uuid} is occupied by PID {pid.strip()}')
 
 
+def gpu_memory(gpu_uuid):
+    rows = csv.reader(nvidia_smi('--query-gpu=uuid,memory.total,memory.used',
+                                '--format=csv,noheader,nounits').splitlines(), skipinitialspace=True)
+    for uuid, total, used in rows:
+        if uuid == gpu_uuid:
+            return int(total) * 2**20, int(used) * 2**20
+    raise RuntimeError(f'GPU {gpu_uuid} not found')
+
+
+def wait_for_quiet_gpu(gpu_uuid):
+    while gpu_memory(gpu_uuid)[1] > 0.5e9:
+        print(f'waiting for GPU {gpu_uuid} usage <= 0.5 GB', flush=True)
+        time.sleep(30)
+
+
 def wait_for_headroom(gpu_uuid, need_bytes):
     # Shared GPU: start only when the free memory covers this query; never touch other processes.
     while True:
-        for uuid, total, used in csv.reader(nvidia_smi('--query-gpu=uuid,memory.total,memory.used',
-                                                       '--format=csv,noheader,nounits').splitlines(),
-                                            skipinitialspace=True):
-            if uuid == gpu_uuid and (int(total) - int(used)) * 2**20 >= need_bytes:
-                return
+        total, used = gpu_memory(gpu_uuid)
+        if total - used >= need_bytes:
+            return
         print(f'waiting for {need_bytes / 1e9:.1f} GB free on {gpu_uuid}', flush=True)
         time.sleep(30)
 
@@ -87,7 +101,13 @@ def main():
     parser.add_argument('--max_pool_gb', type=float, default=14)
     parser.add_argument('--manage_data', action='store_true')
     parser.add_argument('--dbgen_dir', type=Path, default=Path('~/projects/tpch-dbgen-tensors/build'))
+    parser.add_argument('--main_args', default='', help='Quoted arguments appended to main.py')
+    parser.add_argument('--alloc_conf', help='PYTORCH_ALLOC_CONF for child processes')
+    parser.add_argument('--quiet_gpu', action='store_true', help='Wait for GPU usage <= 0.5 GB')
     args = parser.parse_args()
+    main_args = shlex.split(args.main_args)
+    env = None if args.alloc_conf is None else {**os.environ, 'PYTORCH_ALLOC_CONF': args.alloc_conf}
+    gate = wait_for_quiet_gpu if args.quiet_gpu else check_gpu_idle
     max_blocks = math.floor(args.max_pool_gb * 25 + 1e-9)
 
     gpu_uuid = os.environ['CUDA_VISIBLE_DEVICES']
@@ -115,13 +135,14 @@ def main():
                 result = 'pool cannot fit'
                 while blocks <= max_blocks:
                     # Check the selected physical GPU before every fresh process.
-                    check_gpu_idle(gpu_uuid)
+                    gate(gpu_uuid)
                     previous_count = len(read_rows(out))
                     pool = f'{blocks / 25:.2f}'
                     started = time.perf_counter()
                     proc = subprocess.run(
                         ['nice', '-n', '10', sys.executable, 'main.py', '--SF', str(sf), '--q', str(q),
-                         '--gpu_pool_gb', pool, '--no_debug', '--mem_profile', str(out)],
+                         '--gpu_pool_gb', pool, '--no_debug', '--mem_profile', str(out), *main_args],
+                        env=env,
                         cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace',
                     )
                     rows = read_rows(out)

@@ -1,4 +1,5 @@
 import argparse
+import math
 import time
 import json
 import torch
@@ -19,7 +20,7 @@ from operators.output import tqp_output
 from operators.hashjoin import join_vortex
 from utility.logger import datasize_logger, torch_profiler, perf_logger, message_logger, set_torch_profiler, set_datasize_logger, set_perf_logger, set_message_logger
 from IO.pinned_mem import PinnedMemory, GPUMemory
-from utility.lifetime import free_dead as release_dead, last_uses
+from utility.lifetime import free_dead as release_dead, last_uses, max_live_columns
 from experiments.profiling.mem_profiler import mem_profiler, set_mem_profiler, TracedTensorGroup
 
 subquery_result = None
@@ -35,7 +36,8 @@ gpu_memory_pool = None
 
 def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, datasize_profile_dir, time_output_file,
          gpu_pool_gb=4, pinned_pool_gb=2, mem_profile=None, mem_trace=None,
-         free_dead=False, poison_freed=False, check_refs=False):
+         free_dead=False, poison_freed=False, check_refs=False,
+         coalesce_every=False, slab_eps=None, empty_cache_per_op=False):
     
     # message_logger().debug("[Read Configuration & Schema JSON]")
     with open('config.json', 'r') as f:
@@ -53,6 +55,10 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
         print(f"Allocating GPU Memory ({float(gpu_pool_gb)} GB)...", flush=True)
         gpu_memory_pool = GPUMemory(capacity_gb=gpu_pool_gb, block_size_mb=40)
         print("done!", flush=True)
+
+    gpu_memory_pool.coalesce_threshold = 0 if coalesce_every else 5
+    if slab_eps is None and gpu_memory_pool.block_size_bytes != 40 * 1000**2:
+        gpu_memory_pool.reset_block_size(40)
 
     set_mem_profiler(mem_profile, gpu_memory_pool, scale_factor, mem_trace)
     set_message_logger(log, not no_debug)
@@ -113,6 +119,12 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
 
         if gpu_enable:
             torch.cuda.empty_cache()
+
+        if slab_eps is not None:
+            n = max(max_live_columns(plan.ops_idx, plan.ops_dict, free_dead) for plan in query_plans)
+            block_mb = max(1, math.floor(slab_eps * gpu_memory_pool.pool_size_bytes / max(n, 1) / 1000**2))
+            gpu_memory_pool.reset_block_size(block_mb)
+            print(f"slab block = {block_mb} MB (N = {n}, eps = {slab_eps})", flush=True)
 
         mem_profiler().query_start(qid)
         perf_logger().start(f"Query {qid}")
@@ -281,6 +293,8 @@ def exec(scale_factor, qids, perf_report, log, no_debug, torch_profile_dir, data
                 if free_dead:
                     freed = release_dead(tensor_group, gpu_memory_pool, last, j, poison_freed, check_refs)
                     mem_profiler().record_frees(plan, u, freed)
+                if empty_cache_per_op:
+                    torch.cuda.empty_cache()
                 op_end = time.time()
                 op_time = op_end - op_start    
 
@@ -335,6 +349,9 @@ if __name__ == "__main__":
     parser.add_argument('--mem_profile', type=str, required=False, help='Query-level GPU memory records CSV')
     parser.add_argument('--mem_trace', type=str, help='Operator-level GPU memory records directory')
     parser.add_argument('--free_dead', action='store_true', help='Release columns and slab blocks after last use')
+    parser.add_argument('--coalesce_every', action='store_true', help='Coalesce slab segments after every free')
+    parser.add_argument('--slab_eps', type=float, help='Plan slab block size from the live column bound')
+    parser.add_argument('--empty_cache_per_op', action='store_true', help='Empty CUDA cache after each operator')
     parser.add_argument('--poison_freed', action='store_true', help='Fill released slab blocks with 0xFF')
     parser.add_argument('--check_refs', action='store_true', help='Check surviving CUDA tensor references')
     parser.add_argument('--test', action='store_true', help='End to end testing for correcteness on TPCH')
@@ -347,6 +364,9 @@ if __name__ == "__main__":
 
     if (args.poison_freed or args.check_refs) and not args.free_dead:
         parser.error("--poison_freed and --check_refs require --free_dead")
+
+    if args.slab_eps is not None and not 0 < args.slab_eps <= 1:
+        parser.error("--slab_eps must be in (0, 1]")
 
     set_message_logger(args.log, False)
 
@@ -367,7 +387,9 @@ if __name__ == "__main__":
                  args.datasize_profile, args.time_output_file,
                  gpu_pool_gb=args.gpu_pool_gb, pinned_pool_gb=args.pinned_pool_gb, mem_profile=args.mem_profile,
                  mem_trace=args.mem_trace, free_dead=args.free_dead,
-                 poison_freed=args.poison_freed, check_refs=args.check_refs)
+                 poison_freed=args.poison_freed, check_refs=args.check_refs,
+                 coalesce_every=args.coalesce_every, slab_eps=args.slab_eps,
+                 empty_cache_per_op=args.empty_cache_per_op)
         except (torch.OutOfMemoryError, MemoryError) as e:
             mem_profiler().query_failed(e)
             raise

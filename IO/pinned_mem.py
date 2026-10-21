@@ -8,9 +8,8 @@ from utility.logger import message_logger
 from utility.tensor_utils import dtype_size
 
 class MemoryPool:
-    COALESCE_THRESHOLD = 5
-    
     def __init__(self, capacity_gb: int, block_size_mb: int):
+        self.coalesce_threshold = 5
         self.pool_size_bytes = int(capacity_gb * 1000**3)
         self.block_size_bytes = int(block_size_mb * 1000**2)
         
@@ -68,6 +67,15 @@ class MemoryPool:
         self._used_blocks = 0
         self._requested_bytes.clear()
 
+    def reset_block_size(self, block_size_mb):
+        assert not self._allocs, "Block size can only change on an empty pool"
+        self.block_size_bytes = block_size_mb * 1000**2
+        self._num_blocks = self.pool_size_bytes // self.block_size_bytes
+        self.free_all()
+        self._free_times = 0
+        self._peak_blocks = 0
+        self._num_allocs = 0
+
     def free(self, ptr: int):
         length = self._allocs.pop(ptr, None)
         if length is None:
@@ -78,7 +86,7 @@ class MemoryPool:
         self._free.append((ptr, length))
         
         self._free_times += 1
-        if self._free_times > self.COALESCE_THRESHOLD:
+        if self._free_times > self.coalesce_threshold:
             self.coalesce()
             self._free_times = 0
             
@@ -128,7 +136,7 @@ class MemoryPool:
         self._used_blocks -= blocks_to_free
         self._free.append((free_start, blocks_to_free))
         self._free_times += 1
-        if self._free_times > self.COALESCE_THRESHOLD:
+        if self._free_times > self.coalesce_threshold:
             self.coalesce()
             self._free_times = 0
     

@@ -46,7 +46,7 @@ def measure(args, run_case):
                 delete_data(data, sf)
 
 
-def run_query(root, out, sf, q, pool, gpu_uuid, flags, gate=check_gpu_idle):
+def run_query(root, out, sf, q, pool, gpu_uuid, flags, gate=check_gpu_idle, env=None):
     gate(gpu_uuid)
     queries = out / 'queries.csv'
     previous_count = len(read_rows(queries))
@@ -54,6 +54,7 @@ def run_query(root, out, sf, q, pool, gpu_uuid, flags, gate=check_gpu_idle):
     proc = subprocess.run(
         ['nice', '-n', '10', sys.executable, 'main.py', '--SF', str(sf), '--q', str(q),
          '--gpu_pool_gb', pool, '--no_debug', *flags],
+        env=None if env is None else {**os.environ, **env},
         cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace',
     )
     elapsed = time.perf_counter() - started
