@@ -1,6 +1,6 @@
 # Query-level memory of all 22 SF1 queries in one process (experiment 2026-10-12-sf1-pool4gb-perquery).
-# Run on the server from the repo root, passing the text of this file to python -c:
-#   run_server.sh --gpu --log sf1-pool4gb-perquery -- python -c <file text>
+# Run from the repo root by passing the text of this file to python -c:
+#   python -c "$(cat experiments/profiling/2026-10-12-sf1-pool4gb-perquery/measure_perquery.py)"
 # Prints CSV rows prefixed with "CSV,".
 import torch, main
 from IO.pinned_mem import GPUMemory

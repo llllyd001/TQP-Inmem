@@ -17,11 +17,45 @@ def nvidia_smi(*args):
     return subprocess.check_output(['nvidia-smi', *args], text=True, stderr=subprocess.DEVNULL)
 
 
+def gpu_uuid():
+    if 'CUDA_VISIBLE_DEVICES' not in os.environ:
+        uuid = nvidia_smi('--query-gpu=uuid', '--format=csv,noheader').splitlines()[0].strip()
+        os.environ['CUDA_VISIBLE_DEVICES'] = uuid
+    return os.environ['CUDA_VISIBLE_DEVICES']
+
+
 def read_rows(path):
     if not path.exists():
         return []
     with path.open(newline='', encoding='utf-8') as stream:
         return list(csv.DictReader(stream))
+
+
+def summarize(rows, qids):
+    queries = {qid: [] for qid in qids}
+    for row in rows:
+        qid = int(row['qid'])
+        if qid in queries:
+            queries[qid].append(row)
+
+    summary = []
+    for qid, attempts in sorted(queries.items()):
+        successful = {int(row['sf']): row for row in attempts if row['status'] == 'ok'}
+        max_sf = max(successful, default=None)
+        peak = ''
+        if max_sf is not None:
+            row = successful[max_sf]
+            peak_bytes = (int(row['pool_peak_bytes']) + int(row['reserved_peak_bytes'])
+                          - int(row['reserved_start_bytes']))
+            peak = f'{peak_bytes / 1e9:.2f}'
+        failed = [int(row['sf']) for row in attempts
+                  if int(row['sf']) not in successful and (max_sf is None or int(row['sf']) > max_sf)]
+        stopped_by = 'largest SF tested' if attempts else 'no run recorded'
+        if failed:
+            stopped_by = f'OOM at SF {min(failed)}'
+        summary.append({'qid': qid, 'max_sf': max_sf if max_sf is not None else '', 'peak_memory_gb': peak,
+                        'stopped_by': stopped_by})
+    return summary
 
 
 def generate_data(data, sf, dbgen_dir):
@@ -44,7 +78,7 @@ def prepare_data(root, sf, dbgen_dir):
     if any(data.glob(f'SF{sf}-tensor-*.pth')):
         return data, False
     if sf * sf1_bytes > shutil.disk_usage(data).free * 0.15:
-        print(f'Sweep stopped: SF={sf} data estimate exceeds 15% of free space; ask the user first.', flush=True)
+        print(f'Sweep stopped: SF={sf} data estimate exceeds 15% of free disk space.', flush=True)
         return data, None
     try:
         generate_data(data, sf, dbgen_dir)
@@ -106,11 +140,11 @@ def main():
     parser.add_argument('--quiet_gpu', action='store_true', help='Wait for GPU usage <= 0.5 GB')
     args = parser.parse_args()
     main_args = shlex.split(args.main_args)
+    uuid = gpu_uuid()
     env = None if args.alloc_conf is None else {**os.environ, 'PYTORCH_ALLOC_CONF': args.alloc_conf}
     gate = wait_for_quiet_gpu if args.quiet_gpu else check_gpu_idle
     max_blocks = math.floor(args.max_pool_gb * 25 + 1e-9)
 
-    gpu_uuid = os.environ['CUDA_VISIBLE_DEVICES']
     root = Path(__file__).resolve().parents[2]
     out = args.out.resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +169,7 @@ def main():
                 result = 'pool cannot fit'
                 while blocks <= max_blocks:
                     # Check the selected physical GPU before every fresh process.
-                    gate(gpu_uuid)
+                    gate(uuid)
                     previous_count = len(read_rows(out))
                     pool = f'{blocks / 25:.2f}'
                     started = time.perf_counter()
@@ -180,8 +214,18 @@ def main():
         finally:
             if generated and sf != 1:
                 delete_data(data, sf)
-    for q, (last_sf, _, result) in states.items():
-        print(f'Q={q}: max successful SF={last_sf or "none"}; result={result}', flush=True)
+    # Summarize the selected queries and scale factors from the complete CSV.
+    rows = [row for row in read_rows(out) if int(row['sf']) in args.sf]
+    summary = summarize(rows, args.q)
+    summary_path = out.with_name(f'{out.stem}_max_sf.csv')
+    with summary_path.open('w', newline='', encoding='utf-8') as stream:
+        writer = csv.DictWriter(stream, fieldnames=['qid', 'max_sf', 'peak_memory_gb', 'stopped_by'])
+        writer.writeheader()
+        writer.writerows(summary)
+    print(f'\nSummary: {summary_path}', flush=True)
+    print(f'{"qid":>3}  {"max SF":>6}  {"peak GB":>7}  stopped by')
+    for row in summary:
+        print(f'{row["qid"]:>3}  {row["max_sf"]:>6}  {row["peak_memory_gb"]:>7}  {row["stopped_by"]}', flush=True)
 
 
 if __name__ == '__main__':

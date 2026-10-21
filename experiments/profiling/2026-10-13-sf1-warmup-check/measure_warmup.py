@@ -1,8 +1,7 @@
 """Does warmup change query-level memory numbers? One process per call, SF1, 4 GB pool, 40 MB blocks.
 
-Run on the server from the repo root, passing the text of this file to python -c (files here are not synced):
-  run_server.sh --gpu -- python -c <file text> <qid> cold|warm <repeat>
-(run_server.sh pastes the command into a heredoc, so the code must not contain dollar signs, backticks or single quotes.)
+Run from the repo root by passing the text of this file to python -c:
+  python -c "$(cat experiments/profiling/2026-10-13-sf1-warmup-check/measure_warmup.py)" <qid> cold|warm <repeat>
 cold: the query runs twice in a fresh process (run 1 = first ever, run 2 = repeat).
 warm: the warmup() of TQP (all 22 SF1 queries) first, then the query once.
 Prints CSV rows prefixed with "CSV,".

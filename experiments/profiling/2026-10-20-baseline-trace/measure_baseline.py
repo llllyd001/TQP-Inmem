@@ -6,7 +6,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from mem_sweep import check_gpu_idle, delete_data, prepare_data, read_rows
+from mem_sweep import check_gpu_idle, delete_data, gpu_uuid, prepare_data, read_rows
 
 
 def parse_args(description):
@@ -26,7 +26,7 @@ def measure(args, run_case):
     root = Path(__file__).resolve().parents[3]
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    gpu_uuid = os.environ['CUDA_VISIBLE_DEVICES']
+    uuid = gpu_uuid()
 
     for sf in sorted(args.sf):
         generated = False
@@ -40,7 +40,7 @@ def measure(args, run_case):
                 if pool is None:
                     print(f'SF={sf} Q={q}: skipped (no successful final E3 pool)', flush=True)
                     continue
-                run_case(root, out, sf, q, pool, gpu_uuid)
+                run_case(root, out, sf, q, pool, uuid)
         finally:
             if generated and sf != 1:
                 delete_data(data, sf)

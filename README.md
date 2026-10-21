@@ -46,6 +46,31 @@ Example: `python3 main.py --SF 10 --q 9 --gpu_pool_gb 6 --free_dead --slab_eps 0
 
 The report is [`report/main.pdf`](./report/main.pdf); [`report/README.md`](./report/README.md) lists the exact commands behind every table and figure.
 
+## Reproduction: Largest Runnable SF per Query
+
+One command finds, for every query, the largest SF that runs on the current GPU and the memory it needs there. For each SF in `--sf`, `--manage_data` generates the TPC-H tensors with tpch-dbgen-tensors (`--dbgen_dir`, default `~/projects/tpch-dbgen-tensors/build`), runs every query that has not failed yet in a fresh process, and deletes the data again. A query runs at an SF if some slab size lets it finish; the slab size is searched automatically.
+
+Unmodified system:
+```
+python3 experiments/profiling/mem_sweep.py --sf $(seq 1 15) --manage_data --out runs/max_sf_unmodified.csv
+```
+All four memory optimizations:
+```
+python3 experiments/profiling/mem_sweep.py --sf $(seq 1 15) --manage_data --out runs/max_sf_optimized.csv \
+    --main_args "--free_dead --slab_eps 0.01 --coalesce_every" --alloc_conf expandable_segments:True
+```
+
+When the sweep finishes, it prints the path of the summary (`runs/max_sf_<name>_max_sf.csv`) and the same table:
+
+| Column | Meaning |
+| :--- | :--- |
+| `qid` | TPC-H query |
+| `max_sf` | Largest SF in `--sf` at which the query runs |
+| `peak_memory_gb` | Peak GPU memory at that SF: slab high-water mark + PyTorch memory reserved outside the slab (GB = 10^9 bytes; CUDA context not included) |
+| `stopped_by` | `OOM at SF n` if the next SF tested fails, `largest SF tested` if the query ran at every SF |
+
+`runs/max_sf_<name>.csv` keeps one row per attempt. The sweep uses the first GPU unless `CUDA_VISIBLE_DEVICES` names another one, and stops if another process is using it; `--quiet_gpu` waits instead until the GPU is idle. Generating SF n needs about 0.92·n GB of disk, and SF 1–15 takes a few hours.
+
 ## Running the System
 
 Make sure `config.json`'s `tensors path` points to the tpch-dbgen `data/` directory (see `Setup.md`).

@@ -6,7 +6,7 @@ Use the newly added pool counters (`stats()` / `reset_peak()`) to measure, for e
 - Actual data size in the pool.
 - Peak transient memory outside the pool.
 
-This is the first measurement using the B1 counters and a preliminary assessment for B2.
+This is the first measurement with the pool usage counters (`stats`, `reset_peak`).
 
 ## Environment and Code
 - dbresearch1 · NVIDIA GeForce RTX 5080 (16.6 GB) · torch 2.14.0+cu130 (CUDA 13.0) · driver 590.48
@@ -105,7 +105,7 @@ The code is in `experiments/profiling/` in the repository: `measure_perquery.py`
 ## Hypotheses (Unverified)
 - The 40 MB block size was chosen for a "40 GB pool / 1000 blocks" configuration. It is clearly too large for SF1 and a 4 GB pool. Smaller blocks (e.g., 1–4 MB) could reduce Q2's required pool from 3.56 GB to a few hundred MB. The trade-off is a longer free-segment list and more segments to scan during first-fit searches.
 - As SF increases, individual columns grow and the fragmentation fraction should decrease. This needs validation at SF2 or SF5.
-- Identifying the source of transient peaks outside the pool (whether they come from join expansion matrices, hypothesis H1) requires stage-level instrumentation (B1's `mem_profiler.py`).
+- Identifying the source of transient peaks outside the pool (e.g. whether they come from join expansion matrices) requires operator-level instrumentation (`mem_profiler.py`).
 
 ## Comparison with Tasks.md
 Tasks.md identifies Q18, Q9, and Q21 as the first queries to exhaust memory on a 24 GiB card at SF10. Q2 ranks first by pool high-water mark in this experiment; the findings are consistent:
@@ -115,13 +115,13 @@ Tasks.md identifies Q18, Q9, and Q21 as the first queries to exhaust memory on a
 
 ## Follow-up: Questions and Experiments
 
-| Conclusion / hypothesis | New question | Corresponding experiment | Position in schedule |
-| --- | --- | --- | --- |
-| Pool demand is largely inflated by fragmentation from 40 MB blocks | How much pool space can smaller blocks (40, 8, 1 MB) save? What is the cost (longer free lists, slower first-fit searches)? | Block-size sweep: measure both pool high-water mark and query time. Rough estimates with 1 MB blocks: approximately 0.17 GB for Q2 and 0.57 GB for Q7, the largest | Candidate for C3 selection; phase D prototype |
-| Q21 and Q9 are clear outliers in transient peak outside the pool | Which step of which operator produces the peak? Is it join expansion (H1)? Q21 has LeftSemi and LeftAnti self-joins | Operator-level and stage-level measurements with `mem_profiler.py` | B1 (next item) |
-| Linear extrapolation predicts no OOM for Q18 at SF10, contrary to Tasks.md | Does Q18's GPU memory usage grow superlinearly with SF? | Sweep SF1, 2, 5 and plot SF against peak memory | B2 |
-| The fragmentation fraction should decrease as SF increases | How high is pool utilization at SF5? Does block size still matter? | Same as above, also recording utilization | B2 |
-| Q6, Q14, and Q15 all have transient peaks outside the pool of approximately 48 MB | Coincidence, or fixed overhead from the same operation (e.g., a temporary copy of the same lineitem column)? | Identify the peak step for these three queries in stage-level measurements | Check during B1 validation |
+| Conclusion / hypothesis | New question | Corresponding experiment |
+| --- | --- | --- |
+| Pool demand is largely inflated by fragmentation from 40 MB blocks | How much pool space can smaller blocks (40, 8, 1 MB) save? What is the cost (longer free lists, slower first-fit searches)? | Block-size sweep: measure both pool high-water mark and query time. Rough estimates with 1 MB blocks: approximately 0.17 GB for Q2 and 0.57 GB for Q7, the largest |
+| Q21 and Q9 are clear outliers in transient peak outside the pool | Which step of which operator produces the peak? Is it join expansion (H1)? Q21 has LeftSemi and LeftAnti self-joins | Operator-level and stage-level measurements with `mem_profiler.py` |
+| Linear extrapolation predicts no OOM for Q18 at SF10, contrary to Tasks.md | Does Q18's GPU memory usage grow superlinearly with SF? | Sweep SF1, 2, 5 and plot SF against peak memory |
+| The fragmentation fraction should decrease as SF increases | How high is pool utilization at SF5? Does block size still matter? | Same as above, also recording utilization |
+| Q6, Q14, and Q15 all have transient peaks outside the pool of approximately 48 MB | Coincidence, or fixed overhead from the same operation (e.g., a temporary copy of the same lineitem column)? | Identify the peak step for these three queries in stage-level measurements |
 
 ## Limitations
 - Only one run. GPU memory allocation is largely deterministic, but repeat 2–3 times before drawing formal conclusions.

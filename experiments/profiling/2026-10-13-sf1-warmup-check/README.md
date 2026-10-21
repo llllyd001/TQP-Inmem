@@ -80,11 +80,11 @@ The code is in `experiments/profiling/` in the repository: `measure_warmup.py` f
 - **Timing measurements:** disable measurement tools, warm up first or discard the first run; repeat each configuration 3–5 times and report the median.
 
 ## Follow-up: Questions and Experiments
-| Conclusion / hypothesis | New question | Corresponding experiment | Position in schedule |
-| --- | --- | --- | --- |
-| GPU memory measurements do not require warmup | The formal query-level tool can use "one process per query, no warmup" directly | Query-level measurement tool and batch runner | B1 |
-| Fixed overhead such as the CUDA context is part of the OOM budget | What is the total fixed overhead on a 16 GB card (context, kernels, library workspaces)? Does it change with larger SF? | Record device memory usage before query execution in scaling experiments | B2 / E3 |
-| The first run is 7.5–22.5 times slower | Where is the extra time spent? Could it affect performance comparisons? | Break down first-run time with the PyTorch profiler during phase E performance evaluation | E1 (optional) |
+| Conclusion / hypothesis | New question | Corresponding experiment |
+| --- | --- | --- |
+| GPU memory measurements do not require warmup | The formal query-level tool can use "one process per query, no warmup" directly | Query-level measurement tool and batch runner |
+| Fixed overhead such as the CUDA context is part of the OOM budget | What is the total fixed overhead on a 16 GB card (context, kernels, library workspaces)? Does it change with larger SF? | Record device memory usage before query execution in scaling experiments |
+| The first run is 7.5–22.5 times slower | Where is the extra time spent? Could it affect performance comparisons? | Break down first-run time with the PyTorch profiler during phase E performance evaluation |
 
 ## Limitations
 - Only 4 queries at SF1 with a 4 GB pool were measured. Byte-for-byte memory equality should in principle be independent of scale, but larger SF values have not been tested.

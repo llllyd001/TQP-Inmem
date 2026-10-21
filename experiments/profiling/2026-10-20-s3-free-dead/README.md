@@ -7,7 +7,7 @@ Under the same conditions as baseline, measure the effect of `--free_dead` (remo
 - RTX 5080 16 GB (dbresearch1), 40 MB blocks, current placement / coalescing rules (first-fit, coalescing every 6 frees).
 - SF 5, 7, 10; pool size is the last successful size in E3; Q21 SF10 is skipped (could not run in E3).
 - Two fresh processes per (SF, query): reference (no new flags) and reclamation (`--free_dead --mem_profile --mem_trace`); compare the two `results.out` files using `test_main.py` rules (10 significant digits).
-- **Shared GPU:** an automated job under another account was using the card concurrently (2–15 GB). With user approval, each query waited until free GPU memory was at least its measured baseline reserved peak plus 0.5 GB (`mem_sweep.wait_for_headroom`). Memory metrics are per-process and unaffected; `device_used_*` columns include other users' usage and are not used.
+- **Shared GPU:** an automated job under another account was using the card concurrently (2–15 GB). Each query waited until free GPU memory was at least its measured baseline reserved peak plus 0.5 GB (`mem_sweep.wait_for_headroom`). Memory metrics are per-process and unaffected; `device_used_*` columns include other users' usage and are not used.
 - The first reclamation run for SF7 Q21 returned `oom_cuda`: the error showed that another process allocated an additional 2.73 GiB after our headroom check passed. A separate rerun succeeded, with data in `trace-rerun/`; `trace/` retains the original failure, and analysis replaces this group with the rerun data.
 - Server logs: `~/runs/tqp/20261021-000223-s3-free-dead/`, `~/runs/tqp/20261021-001848-s3-rerun-sf7-q21/`.
 
@@ -29,8 +29,8 @@ Under the same conditions as baseline, measure the effect of `--free_dead` (remo
 | `highwater_real_bytes` | Measured high-water mark: $\max_{\text{operators}}\text{slab\_extent\_blocks\_end} \times 40\,\mathrm{MB}$ (including holes) |
 | `live_real` | Actual bytes of allocations still occupied at $H$ and read by that operator or a later one |
 | `internal_real` | $\text{occupied block capacity at }H - \text{actual bytes in occupied allocations}$ |
-| `kept_dead_real` | Actual bytes of allocations still occupied at $H$ whose last read preceded that operator (not reclaimed promptly by approach A) |
-| `kept_mask_real` | Portion of `kept_dead_real` belonging to mask columns (IDs $\ge 10000$, never removed by approach A) |
+| `kept_dead_real` | Actual bytes of allocations still occupied at $H$ whose last read preceded that operator (not reclaimed promptly by plan-based last-use reclamation) |
+| `kept_mask_real` | Portion of `kept_dead_real` belonging to mask columns (IDs $\ge 10000$, never removed by plan-based last-use reclamation) |
 | `holes_real` | Free blocks within $[0, \text{high-water mark})$ at $H$ |
 | `static_need_real_bytes` | $\text{highwater\_real\_bytes} + \text{transient\_peak\_bytes}$: total demand under static partitioning after S3, with the pool sized to the measured high-water mark |
 | `concurrent_need_real` | $\max_{\text{operators}}(\text{occupied-extent endpoint} + \text{PyTorch peak within operator})$ |
@@ -51,7 +51,7 @@ Under the same conditions as baseline, measure the effect of `--free_dead` (remo
   | Ideal replay $H_1$ | 28.60 | 40.24 | 46.68 |
 
   Measurements are 33–40% lower than without reclamation and 3–5% above ideal replay; 42/65 cases exactly match replay.
-- **Mask columns are negligible:** `kept_mask_real` is at most 0.06 GB; no upgrade to approach B is needed.
-- **The gap from ideal replay mainly comes from Spark's overly broad `Input`:** a column appears in the `Input` of every operator it passes through, even if the operator does not read it, delaying reclamation under approach A. The largest gap is Q18 (SF10: measured 3.40 vs. replay 2.68 GB, with 0.62 GB not reclaimed promptly).
+- **Mask columns are negligible:** `kept_mask_real` is at most 0.06 GB; they need no separate reclamation.
+- **The gap from ideal replay mainly comes from Spark's overly broad `Input`:** a column appears in the `Input` of every operator it passes through, even if the operator does not read it, delaying plan-based reclamation. The largest gap is Q18 (SF10: measured 3.40 vs. replay 2.68 GB, with 0.62 GB not reclaimed promptly).
 - **Total demand across both sides (SF10, GB):** Q9 15.31 → 13.03, Q7 9.46 → 6.02, Q10 8.60 → 6.80, Q8 7.40 → 4.84; Q21 SF7 12.63 → 10.31.
 - Tracing was enabled in this experiment; `time_s` is not used for speed comparisons.
