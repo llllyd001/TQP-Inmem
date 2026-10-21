@@ -1,12 +1,13 @@
 """<exp dir>/warmup.csv (raw) -> warmup_derived.csv + figures/.
-Run from the repo root: python3 -B experiments/profiling/analyze_warmup.py 'Other materials/experiments/2026-10-13-sf1-warmup-check'"""
+Run: python3 -B 2026-10-13-sf1-warmup-check/analyze_warmup.py  (from experiments/profiling/)"""
 import csv
 import sys
 from pathlib import Path
 
-import svgplot
 
-here = Path(sys.argv[1]).resolve()
+here = Path(__file__).resolve().parent
+sys.path.insert(0, str(here.parent))  # svgplot lives in experiments/profiling/
+import svgplot  # noqa: E402
 rows = list(csv.DictReader(open(here / "warmup.csv")))
 MB = 10**6
 MEM = ["pool_peak_bytes", "pool_requested_bytes", "pool_allocs", "transient_peak_bytes", "reserved_peak_bytes"]

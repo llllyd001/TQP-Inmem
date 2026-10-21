@@ -1,13 +1,14 @@
 """<exp dir>/per_query.csv (raw) -> per_query_derived.csv + figures/.
-Run from the repo root: python3 -B experiments/profiling/analyze_perquery.py 'Other materials/experiments/2026-10-12-sf1-pool4gb-perquery'"""
+Run: python3 -B 2026-10-12-sf1-pool4gb-perquery/analyze_perquery.py  (from experiments/profiling/)"""
 import csv
 import statistics
 import sys
 from pathlib import Path
 
-import svgplot
 
-here = Path(sys.argv[1]).resolve()
+here = Path(__file__).resolve().parent
+sys.path.insert(0, str(here.parent))  # svgplot lives in experiments/profiling/
+import svgplot  # noqa: E402
 
 BLOCK = 40 * 10**6
 MB = 10**6

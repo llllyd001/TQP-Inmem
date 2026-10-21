@@ -5,6 +5,7 @@ reference (validated: adjacent CVD ΔE >= 9.2). Render to PNG with `render_png` 
 """
 import html
 import math
+import re
 import subprocess
 from pathlib import Path
 
@@ -129,20 +130,24 @@ def _grouped_bars(path, categories, series, title, subtitle, ylabel, xlabel, ref
 
 
 def line_chart(path, xs, series, title, subtitle, ylabel, xlabel, ref=None):
-    """series: [(name, ys)] over shared numeric xs; ref=(y, label) e.g. the GPU capacity."""
-    f = _Frame(title, subtitle, ylabel, max([max(ys) for _, ys in series] + [ref[0] if ref else 0]) * 1.08,
+    """series: [(name, ys)] over shared numeric xs; None in ys ends the line there (e.g. OOM).
+    ref=(y, label) e.g. the GPU capacity. Lines are direct-labeled when there are at most 4."""
+    f = _Frame(title, subtitle, ylabel,
+               max([y for _, ys in series for y in ys if y is not None] + [ref[0] if ref else 0]) * 1.08,
                [(name, SERIES[k]) for k, (name, _) in enumerate(series)])
     span = (max(xs) - min(xs)) or 1
     px = lambda v: f.x0 + 20 + (f.x1 - f.x0 - 40) * (v - min(xs)) / span
     for x in xs:
         f.parts.append(_text(px(x), f.y0 + 18, _fmt(x), 12, anchor="middle"))
     for k, (name, ys) in enumerate(series):
-        pts = " ".join(f"{px(x):.1f},{f.y(y):.1f}" for x, y in zip(xs, ys))
-        f.parts.append(f'<polyline points="{pts}" fill="none" stroke="{SERIES[k]}" stroke-width="2"/>')
-        for x, y in zip(xs, ys):
-            f.parts.append(f'<circle cx="{px(x):.1f}" cy="{f.y(y):.1f}" r="4.5" fill="{SERIES[k]}" '
+        pts = [(px(x), f.y(y)) for x, y in zip(xs, ys) if y is not None]
+        f.parts.append(f'<polyline points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in pts)}" fill="none" '
+                       f'stroke="{SERIES[k]}" stroke-width="2"/>')
+        for x, y in pts:
+            f.parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4.5" fill="{SERIES[k]}" '
                            f'stroke="{SURFACE}" stroke-width="2"/>')
-        f.parts.append(_text(px(xs[-1]) + 8, f.y(ys[-1]) + 4, name, 12, INK))
+        if len(series) <= 4:
+            f.parts.append(_text(pts[-1][0] - 8, pts[-1][1] - 10, name, 12, INK, anchor="end"))
     f.parts.append(_text((f.x0 + f.x1) / 2, H - 16, xlabel, 13, anchor="middle"))
     if ref:
         f.ref_line(*ref)
@@ -172,6 +177,51 @@ def scatter(path, points, title, subtitle, ylabel, xlabel, diagonal=None):
 def render_png(svg_path):
     """SVG -> PNG next to it, via headless Chrome (available locally)."""
     svg = Path(svg_path).resolve()
+    width, height = re.search(r'width="(\d+)" height="(\d+)"', svg.read_text()).groups()
     subprocess.run(["google-chrome", "--headless", "--disable-gpu", "--hide-scrollbars",
-                    f"--window-size={W},{H}", f"--screenshot={svg.with_suffix('.png')}", svg.as_uri()],
+                    f"--window-size={width},{height}", f"--screenshot={svg.with_suffix('.png')}", svg.as_uri()],
                    check=True, capture_output=True)
+
+
+def stacked_grid(path, categories, panels, segments):
+    """Shared-scale small multiples; each category has two stacks, or None for OOM."""
+    cols, pw, ph = 4, 300, 240
+    width, height = cols * pw, 110 + math.ceil(len(panels) / cols) * ph
+    ticks = _nice_ticks(max(sum(stack) for _, groups in panels for group in groups
+                           if group is not None for stack in group) * 1.05)
+    parts = [f'<rect width="{width}" height="{height}" fill="{SURFACE}"/>',
+             _text(24, 30, 'Slab high-water breakdown by query and scale factor', 20, INK, weight='bold'),
+             _text(24, 54, 'Memory in GB (10^9 bytes); paired bars: H0 baseline / H1 free after last read', 14)]
+    x = 24
+    for i, name in enumerate(segments):
+        parts.append(f'<rect x="{x}" y="72" width="12" height="12" fill="{SERIES[i]}"/>')
+        parts.append(_text(x + 18, 83, name, 13))
+        x += 30 + _width(name)
+    for index, (title, groups) in enumerate(panels):
+        ox, oy = (index % cols) * pw, 110 + (index // cols) * ph
+        x0, x1, y0, y1 = ox + 40, ox + pw - 12, oy + 184, oy + 26
+        y = lambda value: y0 - (y0 - y1) * value / ticks[-1]
+        parts.append(_text((x0 + x1) / 2, oy + 16, title, 15, INK, anchor='middle', weight='bold'))
+        for tick in ticks:
+            parts.append(f'<line x1="{x0}" x2="{x1}" y1="{y(tick):.1f}" y2="{y(tick):.1f}" '
+                         f'stroke="{GRID}"/>')
+            parts.append(_text(x0 - 6, y(tick) + 4, _fmt(tick), 11, anchor='end'))
+        slot = (x1 - x0) / len(categories)
+        for i, (cat, group) in enumerate(zip(categories, groups)):
+            center = x0 + slot * (i + 0.5)
+            if group is None:
+                parts.append(_text(center, y0 - 12, 'OOM', 12, INK2, anchor='middle'))
+            else:
+                for b, stack in enumerate(group):
+                    bx = center - 24 + b * 26
+                    base = 0
+                    for s, value in enumerate(stack):
+                        top = base + value
+                        parts.append(f'<rect x="{bx:.1f}" y="{y(top):.1f}" width="22" '
+                                     f'height="{y(base) - y(top):.1f}" fill="{SERIES[s]}"/>')
+                        base = top
+                    parts.append(_text(bx + 11, y0 + 14, f'H{b}', 10, anchor='middle'))
+            parts.append(_text(center, y0 + 32, f'SF{cat}', 12, anchor='middle'))
+    Path(path).write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+                          f'viewBox="0 0 {width} {height}" font-family="{FONT}">{"".join(parts)}</svg>',
+                          encoding='utf-8')
