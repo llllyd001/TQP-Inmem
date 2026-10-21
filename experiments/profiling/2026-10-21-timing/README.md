@@ -8,7 +8,7 @@
 - 配置：`baseline`、`s3`（`--free_dead`）、`s3_s2_s4`（`--free_dead --slab_eps 0.01 --coalesce_every`）、`p1`（`PYTORCH_ALLOC_CONF=expandable_segments:True`）、`s3_p1`、`s3_s2_s4_p1`。不开任何测量工具。
 - 每个 (配置, 查询) 一个新进程，同一进程里连跑该查询 4 次（`--q Q Q Q Q`），第 1 次作为 warmup 丢弃，记录后 3 次。时间为 `main.py` 的 `time_elapsed`（已扣除读盘和输出时间）。
 - 每个进程启动前要求整卡已用显存 ≤ 0.5 GB（`mem_sweep.wait_for_quiet_gpu`），避免与别人的任务争抢。
-- `s3_s2_s4` 与 `s3_s2_s4_p1` 在约前 6 条查询使用了修正前的 N（块大小略大）；块大小只影响 slab 记账，不影响计算。
+- `s3_s2_s4` 与 `s3_s2_s4_p1` 在约前 6 条查询使用了修正前的 N（块大小略大）。块大小影响 slab 内部碎片（显存数据来自 N 修正后的 `2026-10-21-configs`，不受影响）和 slab 记账开销（微秒级，查询为 7–248 ms），不改变查询结果和 GPU 计算，因此不影响本实验的时间结论。
 - 服务器日志：`~/runs/tqp/20261021-011803-timing/`。
 
 ## 文件
