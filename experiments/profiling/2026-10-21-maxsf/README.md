@@ -24,4 +24,12 @@
 | Q7 | SF15（SF20 池超过 14 GB 上限） | ≥ SF20 |
 | 其余 19 条 | ≥ SF20 | ≥ SF20 |
 
-组合配置下 22 条查询都能跑 SF10。
+加测 SF 11–14（Q9、Q21）后：
+
+| 查询 | baseline | 组合 |
+|---|---|---|
+| Q21 | SF10 OOM（E3 中 SF7 能跑） | **SF11**（SF12 OOM） |
+| Q9 | **SF10**（SF11 OOM） | **SF12**（SF13 OOM） |
+| Q7 | SF15 | ≥ SF20 |
+
+组合配置下全部 22 条查询都能跑到 SF11；baseline 在 SF10 时 Q21 已 OOM。服务器日志另见 `~/runs/tqp/20261021-023727-maxsf-fine-combined/`、`~/runs/tqp/20261021-024136-maxsf-fine-baseline/`。
