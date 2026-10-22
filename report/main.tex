@@ -515,7 +515,7 @@ changes. Summed over queries at SF~10 it falls from 129.9 to 106.5 (S3), 100.7 (
 \textbf{Largest runnable SF.} \Cref{tab:maxsf} gives, for every query, the largest SF at which
 some slab size lets it run, testing up to SF~15: SF~10 and 15 for all queries, SF~11--14 for the
 queries that fail at SF~15, and SF~8--9 for Q21 in the unmodified system. With all four
-changes, Q21 runs up to SF~11 and Q9 up to SF~12, instead of SF~9 and 10; the other
+changes, Q21 runs up to SF~11 and Q9 up to SF~12, instead of SF~8 and 10; the other
 20 queries run at SF~15 in both systems. Every query thus runs at SF~11, where the
 unmodified system already fails Q9 and Q21.
 
@@ -525,7 +525,7 @@ unmodified system already fails Q9 and Q21.
 \toprule
 Query & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17 & 18 & 19 & 20 & 21 & 22 \\
 \midrule
-unmodified   & -- & -- & -- & -- & -- & -- & -- & -- & 10 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 9 & -- \\
+unmodified   & -- & -- & -- & -- & -- & -- & -- & -- & 10 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 8 & -- \\
 S3+S2+S4+P1  & -- & -- & -- & -- & -- & -- & -- & -- & 12 & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & 11 & -- \\
 \bottomrule
 \end{tabular*}
@@ -545,7 +545,7 @@ up to SF~15, the largest SF tested.}
 \item \textbf{Device need.} Together, the device need summed over queries at SF~10 falls by
   28\%; Q9 needs 13.3 instead of 16.2\,GB, and Q10 6.8 instead of 12.1\,GB.
 \item \textbf{Scale.} All 22 queries now run at SF~11 on the 16\,GB GPU, where Q9 and Q21
-  previously failed; Q9 runs up to SF~12 instead of 10, and Q21 up to SF~11 instead of 9.
+  previously failed; Q9 runs up to SF~12 instead of 10, and Q21 up to SF~11 instead of 8.
 \item \textbf{Cost.} Results match the unmodified system up to its own run-to-run variation,
   and queries are 2.9\% slower on geometric mean (\cref{sec:tradeoffs}).
 \end{itemize}

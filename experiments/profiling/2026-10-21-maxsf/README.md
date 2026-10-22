@@ -6,7 +6,7 @@ Measure the maximum SF each query can run on a 16 GB card, comparing the unmodif
 ## Method
 - Reuse the adaptive pool search in `experiments/profiling/mem_sweep.py` (as in E3): a query is considered runnable at an SF if any slab size allows it to complete; test SF in ascending order and stop testing larger SF values after a query fails.
 - Baseline: no additional arguments. Combined: `--main_args "--free_dead --slab_eps 0.01 --coalesce_every" --alloc_conf expandable_segments:True`.
-- SF 10, 15, 20 (SF20 data is 18.4 GB, the largest allowed by the disk quota); then test Q9 and Q21 additionally at SF 11–14 (`fine-*.csv`).
+- SF 10, 15, 20 (SF20 data is 18.4 GB, the largest allowed by the disk quota); then test Q9 and Q21 additionally at SF 11–14 (`fine-*.csv`), and the unmodified Q21 at SF 8–9 (`q21-baseline.csv`, `--start_pool_gb 5.2` for the last SF9 search).
 - `--quiet_gpu`: require total device memory usage $\le 0.5\,\mathrm{GB}$ before each run to avoid false OOMs caused by other users' jobs
 - Server logs: `~/runs/tqp/20261021-013929-maxsf-baseline/`, `~/runs/tqp/*-maxsf-combined/`.
 
@@ -15,6 +15,7 @@ Measure the maximum SF each query can run on a 16 GB card, comparing the unmodif
 |---|---|
 | `baseline.csv`, `combined.csv` | One row per attempt (same columns as `mem_profiler.py`'s `_COLUMNS`), SF 10/15/20 |
 | `fine-baseline.csv`, `fine-combined.csv` | Q9 and Q21 attempts at SF 11–14 |
+| `q21-baseline.csv` | Baseline Q21 attempts at SF 8–9 |
 
 ## Main Results (SF 10/15/20)
 | Query | baseline | Combined |
@@ -24,12 +25,12 @@ Measure the maximum SF each query can run on a 16 GB card, comparing the unmodif
 | Q7 | SF15 (pool exceeds the 14 GB limit at SF20) | ≥ SF20 |
 | Other 19 queries | ≥ SF20 | ≥ SF20 |
 
-After additional tests at SF 11–14 (Q9, Q21):
+After additional tests at SF 11–14 (Q9, Q21) and SF 8–9 (baseline Q21):
 
 | Query | baseline | Combined |
 |---|---|---|
-| Q21 | SF10 OOM (SF7 succeeded in E3) | **SF11** (SF12 OOM) |
+| Q21 | **SF8** (SF9 OOM) | **SF11** (SF12 OOM) |
 | Q9 | **SF10** (SF11 OOM) | **SF12** (SF13 OOM) |
 | Q7 | SF15 | ≥ SF20 |
 
-With the combined configuration, all 22 queries run at SF11; baseline already encounters OOM for Q21 at SF10. Additional server logs: `~/runs/tqp/20261021-023727-maxsf-fine-combined/`, `~/runs/tqp/20261021-024137-maxsf-fine-baseline/`.
+With the combined configuration, all 22 queries run at SF11; baseline already encounters OOM for Q21 at SF9 and Q9 at SF11. At SF9 the baseline Q21 needs a slab above 5.2 GB, while a 5.4 GB slab leaves too little memory for PyTorch (reserved reaches 16.2 GB). Additional server logs: `~/runs/tqp/20261021-023727-maxsf-fine-combined/`, `~/runs/tqp/20261021-024137-maxsf-fine-baseline/`, `~/runs/tqp/20261021-101233-q21-then-timing/`, `~/runs/tqp/20261021-171438-q21-sf9/`.
